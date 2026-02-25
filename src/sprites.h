@@ -61,7 +61,7 @@ enum GUIButtonSprite {
     GBS_creature_states_train = 57,
     GBS_creature_states_lair = 58,
     GBS_creature_states_hungry = 59,
-    GBS_creature_states_unk059 = 60,
+    GBS_creature_states_unusedparam = 60,
     GBS_creature_states_livid = 61,
     GBS_creature_states_cta = 62,
     GBS_creature_states_fight = 63,
@@ -738,6 +738,8 @@ enum GUIPanelSprite {
     GPS_keepower_timebomb_std_l = 566,
     GPS_keepower_timebomb_dis_l = 567,
 
+    GPS_message_rpanel_msg_bonusbox_act = 776,
+    GPS_message_rpanel_msg_bonusbox_std = 777,
     GPS_message_rpanel_msg_payday_act = 778,
     GPS_message_rpanel_msg_payday_std = 779,
     GPS_message_rpanel_msg_alarm_act = 800,

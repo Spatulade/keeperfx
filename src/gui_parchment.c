@@ -148,7 +148,7 @@ long get_parchment_map_area_rect(struct TbRect *map_area)
     return block_size;
 }
 
-TbBool point_to_overhead_map(const struct Camera *camera, const long screen_x, const long screen_y, long *map_x, long *map_y)
+TbBool point_to_overhead_map(const struct Camera *camera, const long screen_x, const long screen_y, int32_t *map_x, int32_t *map_y)
 {
     // Sizes of the parchment map on which we are
     struct TbRect map_area;
@@ -265,7 +265,7 @@ TbPixel get_overhead_mapblock_color(MapSubtlCoord stl_x, MapSubtlCoord stl_y, Pl
       } else
       if (slb->kind == SlbT_ROCK_FLOOR)
       {
-          pixval = 0; //todo make it distinct from rock, preferably by showing a pattern like on walls
+          pixval = pixmap.ghost[3];
       }
       else
       if ((mapblk->flags & SlbAtFlg_Filled) != 0)
@@ -716,7 +716,8 @@ void draw_zoom_box_things_on_mapblk(struct Map *mapblk,unsigned short subtile_si
             }
             case TCls_Trap:
             {
-                if ((!thing->trap.revealed) && (player->id_number != thing->owner))
+                struct TrapConfigStats* trapst = get_trap_model_stats(thing->model);
+                if ((!thing->trap.revealed) && (player->id_number != thing->owner) && (trapst->hidden != 0))
                     break;
                 struct ManufactureData* manufctr = get_manufacture_data(get_manufacture_data_index_for_thing(thing->class_id, thing->model));
                 spridx = manufctr->medsym_sprite_idx;

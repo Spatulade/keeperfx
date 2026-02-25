@@ -23,6 +23,7 @@
 #include "thing_creature.h"
 #include "thing_effects.h"
 #include "magic_powers.h"
+#include "config_crtrstates.h"
 
 #include "lua_base.h"
 #include "lua_params.h"
@@ -62,6 +63,14 @@ static int lua_delete_thing(lua_State *L)
 {
     struct Thing *thing = luaL_checkThing(L, 1);
 
+    if (thing_is_picked_up(thing))
+    {
+        for (PlayerNumber plyr_idx = 0; plyr_idx < PLAYERS_COUNT; plyr_idx++)
+        {
+            if (remove_thing_from_power_hand(thing, plyr_idx))
+                break;
+        }
+    }
     if (thing->class_id == TCls_Creature)
     {
         kill_creature(thing, INVALID_THING, -1, CrDed_NoEffects | CrDed_NotReallyDying);
@@ -86,17 +95,39 @@ static int lua_creature_walk_to(lua_State *L)
     int stl_x = luaL_checkstl_x(L, 2);
     int stl_y = luaL_checkstl_y(L, 3);
 
-    if (!setup_person_move_to_position(thing, stl_x, stl_y, NavRtF_Default))
-        WARNLOG("Move %s order failed", thing_model_name(thing));
-    thing->continue_state = CrSt_ManualControl;
-
-    return 0;
+    CrtrStateId crstate = get_creature_state_besides_move(thing);
+    lua_pushboolean(L, setup_person_move_to_position(thing, stl_x, stl_y, NavRtF_Default));
+    if (crstate != 0)
+    {
+        thing->continue_state = crstate;
+    }
+    return 1;
 }
 
 static int lua_kill_creature(lua_State *L)
 {
+    struct Thing* thing = luaL_checkCreature(L, 1);
+    struct Thing* killer = INVALID_THING;
+    PlayerNumber killing_player = -1;
+    if (!lua_isnone(L, 2))
+    {
+        killer = luaL_checkCreature(L, 2);
+        killing_player = killer->owner;
+    }
+    kill_creature(thing, killer, killing_player, CrDed_NoUnconscious);
+
+    return 0;
+}
+
+static int lua_stun_creature(lua_State* L)
+{
     struct Thing* thing = luaL_checkThing(L, 1);
-    kill_creature(thing, INVALID_THING, -1, CrDed_NoUnconscious);
+    make_creature_unconscious(thing);
+    if (!lua_isnone(L, 2))
+    {
+        struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
+        cctrl->conscious_back_turns = luaL_checkinteger(L, 2);
+    }
 
     return 0;
 }
@@ -157,7 +188,7 @@ static int thing_tostring(lua_State *L)
 {
     char buff[64];
     struct Thing* thing = luaL_checkThing(L, 1);
-    snprintf(buff, sizeof(buff), "id: %d turn: %ld %s", thing->index, thing->creation_turn, thing_class_and_model_name(thing->class_id,thing->model));
+    snprintf(buff, sizeof(buff), "id: %d turn: %d %s", thing->index, thing->creation_turn, thing_class_and_model_name(thing->class_id,thing->model));
 
     lua_pushfstring(L, "Thing (%s)", buff);
     return 1;
@@ -168,6 +199,7 @@ static int thing_set_field(lua_State *L) {
     struct Thing* thing = luaL_checkThing(L, 1);
     const char* key = luaL_checkstring(L, 2);
 
+    //Fields working for all thing classes
     if (strcmp(key, "orientation") == 0) {
         thing->move_angle_xy = luaL_checkinteger(L, 3);
 
@@ -178,38 +210,161 @@ static int thing_set_field(lua_State *L) {
         }
         change_creature_owner(thing, new_owner);
 
-    } else if (strcmp(key, "name") == 0) {
-        if (thing->class_id != TCls_Creature) {
-            return luaL_error(L, "Attempt to set name of non-creature thing");
-        }
+    } else if (strcmp(key, "health") == 0)
+    {
+        thing->health = luaL_checkinteger(L, 3);
+    } else if (strcmp(key, "pos") == 0) 
+    {
+        struct Coord3d pos;
+        luaL_checkCoord3d(L, 3, &pos);
+        move_thing_in_map(thing, &pos);
+    } else if (strcmp(key, "anim_sprite") == 0)
+    {
+        thing->anim_sprite = luaL_checkAnimationId(L, 3);
+        thing->max_frames = keepersprite_frames(thing->anim_sprite);
+    } else if (strcmp(key, "anim_speed") == 0)
+    {
+        thing->anim_speed = luaL_checkinteger(L, 3);
+    } else if (strcmp(key, "sprite_size") == 0)
+    {
+        thing->sprite_size = luaL_checkinteger(L, 3);
+    } else if (strcmp(key, "sprite_size_min") == 0)
+    {
+        thing->sprite_size_min = luaL_checkinteger(L, 3);
+    } else if (strcmp(key, "sprite_size_max") == 0)
+    {
+        thing->sprite_size_max = luaL_checkinteger(L, 3);
+    } else if (strcmp(key, "transformation_speed") == 0)
+    {
+        thing->transformation_speed = luaL_checkinteger(L, 3);
+    } else if (strcmp(key, "clipbox_size_xy") == 0)
+    {
+        thing->clipbox_size_xy = luaL_checkinteger(L, 3);
+    } else if (strcmp(key, "clipbox_size_z") == 0)
+    {
+        thing->clipbox_size_z = luaL_checkinteger(L, 3);
+    } else if (strcmp(key, "solid_size_xy") == 0)
+    {
+        thing->solid_size_xy = luaL_checkinteger(L, 3);
+    } else if (strcmp(key, "solid_size_z") == 0)
+    {
+        thing->solid_size_z = luaL_checkinteger(L, 3);
+    }
 
+    //Fields working for specific classes
+    else if (thing->class_id == TCls_Creature)
+    {
         struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
         if (creature_control_invalid(cctrl)) {
             return luaL_error(L, "Invalid creature control block");
         }
-
-        const char* name = luaL_checkstring(L, 3);
-        if (strlen(name) > CREATURE_NAME_MAX) {
-            return luaL_error(L, "Creature name too long (max %d)", CREATURE_NAME_MAX);
+        if (strcmp(key, "name") == 0)
+        {
+            const char* name = luaL_checkstring(L, 3);
+            if (strlen(name) > CREATURE_NAME_MAX)
+            {
+                return luaL_error(L, "Creature name too long (max %d)", CREATURE_NAME_MAX);
+            }
+            strncpy(cctrl->creature_name, name, CREATURE_NAME_MAX);
+        } else if (strcmp(key, "gold_held") == 0)
+        {
+             thing->creature.gold_carried = luaL_checkinteger(L, 3);
+        } else if (strcmp(key, "exp_points") == 0)
+        {
+            cctrl->exp_points = luaL_checkinteger(L, 3);
+            check_experience_upgrade(thing);
+        } else if (strcmp(key, "pos") == 0)
+        {
+            luaL_checkCoord3d(L, 3, &thing->mappos);
+        } else if (strcmp(key, "moveto_pos") == 0)
+        {
+            luaL_checkCoord3d(L, 3, &cctrl->moveto_pos);
+        } else if (strcmp(key, "flee_pos") == 0)
+        {
+            luaL_checkCoord3d(L, 3, &cctrl->flee_pos);
         }
-
-        strncpy(cctrl->creature_name, name, CREATURE_NAME_MAX);
-
-    } else if (strcmp(key, "health") == 0) {
-        thing->health = luaL_checkinteger(L, 3);
-
-    } else if (strcmp(key, "shots") == 0) {
-        if (thing->class_id != TCls_Trap) {
-            return luaL_error(L, "Attempt to set shots of non-trap thing");
+        else if (strcmp(key, "max_speed") == 0)
+        {
+            cctrl->max_speed = luaL_checkinteger(L, 3);
+        } else if (strcmp(key, "patrol_pos") == 0)
+        {
+            luaL_checkCoord3d(L, 3, &cctrl->patrol.pos);
+        } else if (strcmp(key, "patrol_countdown") == 0)
+        {
+            cctrl->patrol.countdown = luaL_checkinteger(L, 3);
+        } else if (strcmp(key, "party_objective") == 0)
+        {
+            cctrl->party.objective = luaL_checkNamedCommand(L, 3, hero_objective_desc);
+        } else if (strcmp(key, "party_original_objective") == 0)
+        {
+            cctrl->party.original_objective = luaL_checkNamedCommand(L, 3, hero_objective_desc);
+        } else if (strcmp(key, "party_target_player") == 0)
+        {
+            cctrl->party.target_plyr_idx = luaL_checkPlayerSingle(L, 3);
+        } else if (strcmp(key, "state") == 0)
+        {
+            internal_set_thing_state(thing, luaL_checkNamedCommand(L, 3, creatrstate_desc));
+        } else if (strcmp(key, "continue_state") == 0)
+        {
+            thing->continue_state = luaL_checkNamedCommand(L, 3, creatrstate_desc);
+        } else if (strcmp(key, "hunger_amount") == 0)
+        {
+            cctrl->hunger_amount = luaL_checkinteger(L, 3);
+        } else if (strcmp(key, "hunger_level") == 0)
+        {
+            cctrl->hunger_level = luaL_checkinteger(L, 3);
+        } else if (strcmp(key, "creature_kills") == 0)
+        {
+            cctrl->kills_num = luaL_checkinteger(L, 3);
+        } else if (strcmp(key, "creature_kills_allies") == 0)
+        {
+            cctrl->kills_num_allied = luaL_checkinteger(L, 3);
+        } else if (strcmp(key, "creature_kills_enemies") == 0)
+        {
+            cctrl->kills_num_enemy = luaL_checkinteger(L, 3);
+        } else if (strcmp(key, "hunger_loss") == 0)
+        {
+            cctrl->hunger_loss = luaL_checkinteger(L, 3);
+        } else if (strcmp(key, "hand_blocked_turns") == 0)
+        {
+            cctrl->hand_blocked_turns = luaL_checkinteger(L, 3);
+        } else if (strcmp(key, "force_health_flower_displayed") == 0)
+        {
+            cctrl->force_health_flower_displayed = lua_toboolean(L, 3);
+        } else if (strcmp(key, "force_health_flower_hidden") == 0)
+        {
+            cctrl->force_health_flower_hidden = lua_toboolean(L, 3);
+        } else if (strcmp(key, "conscious_back_turns") == 0)
+        {
+            cctrl->conscious_back_turns = luaL_checkinteger(L, 3);
+        } else
+        {
+            return luaL_error(L, "Field '%s' is not writable on Creature thing", key);
         }
-        set_trap_shots(thing, luaL_checkinteger(L, 3));
-
-    } else if (strcmp(key, "pos") == 0) {
-        luaL_checkCoord3d(L, 3, &thing->mappos);
-    } else {
+    } else if (thing->class_id == TCls_Trap) // Fields working for Traps
+    {
+        if (strcmp(key, "shots") == 0)
+        {
+            set_trap_shots(thing, luaL_checkinteger(L, 3));
+        } else if (strcmp(key, "revealed") == 0)
+        {
+            thing->trap.revealed = luaL_checkinteger(L, 3);
+        }
+        else if (strcmp(key, "rearm_turn") == 0)
+        {
+            thing->trap.rearm_turn = luaL_checkinteger(L, 3);
+        }
+        else if (strcmp(key, "shooting_finished_turn") == 0)
+        {
+            thing->trap.shooting_finished_turn = luaL_checkinteger(L, 3);
+        } else
+        {
+            return luaL_error(L, "Field '%s' is not writable on Trap thing", key);
+        }
+    } else
+    {
         return luaL_error(L, "Field '%s' is not writable on Thing", key);
     }
-
     return 1;
 }
 
@@ -220,10 +375,9 @@ static int thing_get_field(lua_State *L) {
     {
         return 1;
     }
-
     struct Thing* thing = luaL_checkThing(L, 1);
-
-    // Built-in fields
+    struct CreatureControl* cctrl;
+    // Built-in fields shared by all thing classes
     if (strcmp(key, "ThingIndex") == 0) {
         lua_pushinteger(L, thing->index);
     } else if (strcmp(key, "creation_turn") == 0) {
@@ -238,31 +392,117 @@ static int thing_get_field(lua_State *L) {
         lua_pushinteger(L, thing->move_angle_xy);
     } else if (strcmp(key, "health") == 0) {
         lua_pushinteger(L, thing->health);
+    } else if (strcmp(key, "anim_sprite") == 0) {
+        lua_pushinteger(L, thing->anim_sprite);
+    } else if (strcmp(key, "anim_speed") == 0) {
+        lua_pushinteger(L, thing->anim_speed);
+    } else if (strcmp(key, "sprite_size") == 0) {
+        lua_pushinteger(L, thing->sprite_size);
+    } else if (strcmp(key, "sprite_size_min") == 0) {
+        lua_pushinteger(L, thing->sprite_size_min);
+    } else if (strcmp(key, "sprite_size_max") == 0) {
+        lua_pushinteger(L, thing->sprite_size_max);
+    } else if (strcmp(key, "transformation_speed") == 0) {
+        lua_pushinteger(L, thing->transformation_speed);
+    } else if (strcmp(key, "clipbox_size_xy") == 0) {
+        lua_pushinteger(L, thing->clipbox_size_xy);
+    } else if (strcmp(key, "clipbox_size_z") == 0) {
+        lua_pushinteger(L, thing->clipbox_size_z);
+    } else if (strcmp(key, "solid_size_xy") == 0) {
+        lua_pushinteger(L, thing->solid_size_xy);
+    } else if (strcmp(key, "solid_size_z") == 0) {
+        lua_pushinteger(L, thing->solid_size_z);
     } else if (strcmp(key, "max_health") == 0) {
         lua_pushinteger(L, get_thing_max_health(thing));
-    } else if (strcmp(key, "shots") == 0) {
-        if (thing->class_id != TCls_Trap)
-            return luaL_error(L, "Attempt to access 'shots' of non-trap thing");
-        lua_pushinteger(L, thing->trap.num_shots);
-    } else if (strcmp(key, "level") == 0) {
-        struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
-        if (creature_control_invalid(cctrl))
-            return luaL_error(L, "Attempt to access 'level' of non-creature thing");
-        lua_pushinteger(L, cctrl->exp_level);
-    } else if (strcmp(key, "name") == 0) {
-        if (thing->class_id != TCls_Creature)
-            return luaL_error(L, "Attempt to get 'name' of non-creature thing");
-        lua_pushstring(L, creature_own_name(thing));
-    } else if (strcmp(key, "party") == 0) {
-        if (thing->class_id != TCls_Creature)
-            return luaL_error(L, "Attempt to get 'party' of non-creature thing");
-        lua_pushPartyTable(L, get_group_leader(thing));
     } else if (strcmp(key, "picked_up") == 0) {
         lua_pushboolean(L, thing_is_picked_up(thing));
     } else if (try_get_from_methods(L, 1, key)) {
         return 1;
+    }
+
+    //build in fields specific to one thing class
+    else if (thing_is_creature(thing))
+    {
+        cctrl = creature_control_get_from_thing(thing);
+        if (creature_control_invalid(cctrl))
+            return luaL_error(L, "Invalid creature control block");
+
+        if (strcmp(key, "name") == 0) {
+            lua_pushstring(L, creature_own_name(thing));
+        } else if (strcmp(key, "gold_held") == 0) {
+            lua_pushinteger(L, thing->creature.gold_carried);
+        } else if (strcmp(key, "party") == 0) {
+            lua_pushPartyTable(L, get_group_leader(thing));
+        } else if (strcmp(key, "level") == 0) {
+            lua_pushinteger(L, cctrl->exp_level + 1);
+        } else if (strcmp(key, "max_speed") == 0) {
+            lua_pushinteger(L, cctrl->max_speed);
+        } else if (strcmp(key, "exp_points") == 0) {
+            lua_pushinteger(L, cctrl->exp_points);
+        } else if (strcmp(key, "creature_kills") == 0) {
+            lua_pushinteger(L, cctrl->kills_num);
+        } else if (strcmp(key, "creature_kills_enemies") == 0) {
+            lua_pushinteger(L, cctrl->kills_num_enemy);
+        } else if (strcmp(key, "creature_kills_allies") == 0) {
+            lua_pushinteger(L, cctrl->kills_num_allied);
+        } else if (strcmp(key, "hunger_amount") == 0) {
+            lua_pushinteger(L, cctrl->hunger_amount);
+        } else if (strcmp(key, "hunger_level") == 0) {
+            lua_pushinteger(L, cctrl->hunger_level);
+        } else if (strcmp(key, "hunger_loss") == 0) {
+            lua_pushinteger(L, cctrl->hunger_loss);
+        } else if (strcmp(key, "opponents_melee_count") == 0) {
+            lua_pushinteger(L, cctrl->opponents_melee_count);
+        } else if (strcmp(key, "opponents_ranged_count") == 0) {
+            lua_pushinteger(L, cctrl->opponents_ranged_count);
+        } else if (strcmp(key, "opponents_count") == 0) {
+            lua_pushinteger(L, (cctrl->opponents_melee_count + cctrl->opponents_ranged_count));
+        } else if (strcmp(key, "force_health_flower_displayed") == 0) {
+            lua_pushinteger(L, cctrl->force_health_flower_displayed);
+        } else if (strcmp(key, "force_health_flower_hidden") == 0) {
+            lua_pushinteger(L, cctrl->force_health_flower_hidden);
+        } else if (strcmp(key, "hand_blocked_turns") == 0) {
+            lua_pushinteger(L, cctrl->hand_blocked_turns);
+        } else if (strcmp(key, "state") == 0) {
+            lua_pushstring(L, get_conf_parameter_text(creatrstate_desc, thing->active_state));
+        } else if (strcmp(key, "continue_state") == 0) {
+            lua_pushstring(L, get_conf_parameter_text(creatrstate_desc, thing->continue_state));
+        } else if (strcmp(key, "workroom") == 0) {
+            lua_pushRoom(L, room_get(cctrl->work_room_id));
+        } else if (strcmp(key, "moveto_pos") == 0) {
+            lua_pushPos(L, &cctrl->moveto_pos);
+        } else if (strcmp(key, "flee_pos") == 0) {
+            lua_pushPos(L, &cctrl->flee_pos);
+        } else if (strcmp(key, "patrol_pos") == 0) {
+            lua_pushPos(L, &cctrl->patrol.pos);
+        } else if (strcmp(key, "patrol_countdown") == 0) {
+            lua_pushinteger(L, cctrl->patrol.countdown);
+        } else if (strcmp(key, "party_objective") == 0) {
+            lua_pushstring(L, get_conf_parameter_text(hero_objective_desc, cctrl->party.objective));
+        } else if (strcmp(key, "party_original_objective") == 0) {
+            lua_pushstring(L, get_conf_parameter_text(hero_objective_desc, cctrl->party.original_objective));
+        } else if (strcmp(key, "party_target_player") == 0) {
+            lua_pushPlayer(L, cctrl->party.target_plyr_idx);
+        } else if (strcmp(key, "conscious_back_turns") == 0) {
+            lua_pushinteger(L, cctrl->conscious_back_turns);
+        } else {
+            return luaL_error(L, "Unknown field or method '%s' for Creature thing", key);
+        }
+    } else if (thing->class_id == TCls_Trap)
+    {
+        if (strcmp(key, "shots") == 0) {
+            lua_pushinteger(L, thing->trap.num_shots);
+        } else if (strcmp(key, "revealed") == 0) {
+            lua_pushinteger(L, thing->trap.revealed);
+        } else if (strcmp(key, "rearm_turn") == 0) {
+            lua_pushinteger(L, thing->trap.rearm_turn);
+        } else if (strcmp(key, "shooting_finished_turn") == 0) {
+            lua_pushinteger(L, thing->trap.shooting_finished_turn);
+        } else {
+            return luaL_error(L, "Unknown field or method '%s' for Trap thing", key);
+        }
     } else {
-        return luaL_error(L, "Unknown field or method '%s' for Thing", key);
+        return luaL_error(L, "Unknown or unavailable field or method '%s' for Thing", key);
     }
 
     return 1;
@@ -324,8 +564,9 @@ static int thing_eq(lua_State *L) {
 
 static const struct luaL_Reg thing_methods[] = {
     {"make_thing_zombie", make_thing_zombie},
-    {"creature_walk_to",  lua_creature_walk_to},
+    {"walk_to",  lua_creature_walk_to},
     {"kill",    lua_kill_creature},
+    {"stun",    lua_stun_creature},
     {"delete",     lua_delete_thing},
     {"isValid",         lua_is_valid},
     

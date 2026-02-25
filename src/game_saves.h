@@ -28,7 +28,7 @@ extern "C" {
 /******************************************************************************/
 #define CAMPAIGN_SAVE_SLOTS_COUNT 8
 #define TOTAL_SAVE_SLOTS_COUNT    8
-#define SAVE_TEXTNAME_LEN        15
+#define SAVE_TEXTNAME_LEN        30
 #define PLAYER_NAME_LENGTH       64
 
 enum SaveGameChunks {
@@ -70,12 +70,15 @@ enum CatalogueEntryFlags {
 
 struct CatalogueEntry {
     unsigned short flags;
-    unsigned long version;
     char textname[SAVE_TEXTNAME_LEN];
     LevelNumber level_num;
     char campaign_name[LINEMSG_SIZE];
     char campaign_fname[DISKPATH_SIZE];
     char player_name[PLAYER_NAME_LENGTH];
+    unsigned short game_ver_major;
+    unsigned short game_ver_minor;
+    unsigned short game_ver_release;
+    unsigned short game_ver_build;
 };
 
 struct FileChunkHeader {
@@ -90,8 +93,10 @@ extern const char* continue_game_filename;
 
 #pragma pack()
 /******************************************************************************/
-extern long const VersionMajor;
-extern long const VersionMinor;
+extern const short VersionMajor;
+extern const short VersionMinor;
+extern short const VersionRelease;
+extern short const VersionBuild;
 extern struct CatalogueEntry save_game_catalogue[];
 /******************************************************************************/
 int load_game_chunks(TbFileHandle fhandle,struct CatalogueEntry *centry);
