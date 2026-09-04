@@ -5,25 +5,25 @@
 -- Every check must have a unique integer ID associated with it.
 ChecksTable = {
 --CREATURES --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------    
-	[1]  = {id=1,    internal_name="FLY",                 name="Fly",                          string="264",       text="Attract Fly"},           --unlocked from start in default settings
-	[2]  = {id=2,    internal_name="BUG",                 name="Beetle",                       string="260",       text="Attract Beetle"},        --unlocked from start in default settings
-	[3]  = {id=3,    internal_name="SPIDER",              name="Spider",                       string="265",       text="Attract Spider"},        --unlocked from start in default settings
-	[4]  = {id=4,    internal_name="DEMONSPAWN",          name="Demon Spawn",                  string="262",       text="Attract Demon Spawn"},   --unlocked from start in default settings
-	[5]  = {id=5,    internal_name="SORCEROR",            name="Warlock",                      string="263",       text="Attract Warlock"},       --unlocked from start in default settings
-	[6]  = {id=6,    internal_name="TROLL",               name="Troll",                        string="261",       text="Attract Troll"},
-	[7]  = {id=7,    internal_name="BILE_DEMON",          name="Bile Demon",                   string="273",       text="Attract Bile Demon"},
-	[8]  = {id=8,    internal_name="ORC",                 name="Orc",                          string="278",       text="Attract Orc"},
-	[9]  = {id=9,    internal_name="DARK_MISTRESS",       name="Mistress",                     string="272",       text="Attract Mistress"},
-	[10] = {id=10,   internal_name="DRAGON",              name="Dragon",                       string="268",       text="Attract Dragon"},
-	[11] = {id=11,   internal_name="SKELETON",            name="Skeleton",                     string="266",       text="Attract Skeleton"},      --not usually attracted from Portal but I think that's fine and adds variety
-	[12] = {id=12,   internal_name="GHOST",               name="Ghost",                        string="271",       text="Attract Ghost"},         --not usually attracted from Portal but I think that's fine and adds variety
-	[13] = {id=13,   internal_name="TENTACLE",            name="Tentacle",                     string="269",       text="Attract Tentacle"},
-	[14] = {id=14,   internal_name="HELL_HOUND",          name="Hound",                        string="270",       text="Attract Hound"},
-	[15] = {id=15,   internal_name="HORNY",               name="Horned Reaper",                string="267",       text="Attract Horned Reaper"}, --not usually attracted from Portal but I think that's fine and adds variety
-	[16] = {id=16,   internal_name="VAMPIRE",             name="Vampire",                      string="274",       text="Attract Vampire"},       --not usually attracted from Portal but I think that's fine and adds variety
---	[17] = {id=17,   internal_name="DRUID",               name="Druid",                        string="1042",      text="Attract Druid"},
---	[18] = {id=18,   internal_name="MAIDEN",              name="Maiden",                       string="1045",      text="Attract Maiden"},
---	[19] = {id=19,   internal_name="",                    name="(others?)",                    string="",          text="Attract (others?)"},
+     [1]  = {id=1,   internal_name="FLY",                 name="Fly",                          string="264",       text="Attract Fly"},           --unlocked from start in default settings
+     [2]  = {id=2,   internal_name="BUG",                 name="Beetle",                       string="260",       text="Attract Beetle"},        --unlocked from start in default settings
+     [3]  = {id=3,   internal_name="SPIDER",              name="Spider",                       string="265",       text="Attract Spider"},        --unlocked from start in default settings
+     [4]  = {id=4,   internal_name="DEMONSPAWN",          name="Demon Spawn",                  string="262",       text="Attract Demon Spawn"},   --unlocked from start in default settings
+     [5]  = {id=5,   internal_name="SORCEROR",            name="Warlock",                      string="263",       text="Attract Warlock"},       --unlocked from start in default settings
+     [6]  = {id=6,   internal_name="TROLL",               name="Troll",                        string="261",       text="Attract Troll"},
+     [7]  = {id=7,   internal_name="BILE_DEMON",          name="Bile Demon",                   string="273",       text="Attract Bile Demon"},
+     [8]  = {id=8,   internal_name="ORC",                 name="Orc",                          string="278",       text="Attract Orc"},
+     [9]  = {id=9,   internal_name="DARK_MISTRESS",       name="Mistress",                     string="272",       text="Attract Mistress"},
+     [10] = {id=10,  internal_name="DRAGON",              name="Dragon",                       string="268",       text="Attract Dragon"},
+     [11] = {id=11,  internal_name="SKELETON",            name="Skeleton",                     string="266",       text="Attract Skeleton"},      --not usually attracted from Portal but I think that's fine and adds variety
+     [12] = {id=12,  internal_name="GHOST",               name="Ghost",                        string="271",       text="Attract Ghost"},         --not usually attracted from Portal but I think that's fine and adds variety
+     [13] = {id=13,  internal_name="TENTACLE",            name="Tentacle",                     string="269",       text="Attract Tentacle"},
+     [14] = {id=14,  internal_name="HELL_HOUND",          name="Hound",                        string="270",       text="Attract Hound"},
+     [15] = {id=15,  internal_name="HORNY",               name="Horned Reaper",                string="267",       text="Attract Horned Reaper"}, --not usually attracted from Portal but I think that's fine and adds variety
+     [16] = {id=16,  internal_name="VAMPIRE",             name="Vampire",                      string="274",       text="Attract Vampire"},       --not usually attracted from Portal but I think that's fine and adds variety
+--   [17] = {id=17,  internal_name="DRUID",               name="Druid",                        string="1042",      text="Attract Druid"},
+--   [18] = {id=18,  internal_name="MAIDEN",              name="Maiden",                       string="1045",      text="Attract Maiden"},
+--   [19] = {id=19,  internal_name="",                    name="(others?)",                    string="",          text="Attract (others?)"},
 -- ROOMS --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     [101] = {id=101, internal_name="TREASURE",            name="Treasure Room",                string="599",       text="Treasure Room Researchable"},           --unlocked from start in default settings
     [102] = {id=102, internal_name="LAIR",                name="Lair",                         string="609",       text="Lair Researchable"},                    --unlocked from start in default settings
@@ -83,7 +83,7 @@ ChecksTable = {
 --  [424] = {id=424, internal_name="POWER_VISION",        name="Vision",                       string="1058",      text="Vision Researchable"},
 --  [425] = {id=425, internal_name="POWER_TUNNELLER",     name="Recruit Tunneller",            string="1072",      text="Recruit Tunneller Researchable"},
 --  [426] = {id=426, internal_name="POWER_CLEANSE",       name="Cleanse",                      string="",          text="Cleanse Researchable"},          --not made yet
---   could optionally split POWER_HAND up into POWER_PICKUP_CREATURE, POWER_PICKUP_GOLD, POWER_PICKUP_FOOD
+--  could optionally split POWER_HAND up into POWER_PICKUP_CREATURE, POWER_PICKUP_GOLD, POWER_PICKUP_FOOD
 -- LEVELS --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 --    --Levels
 --    --Three of these should be unlocked by default.
@@ -203,12 +203,6 @@ ChecksTable = {
 --    --Lose gold
 --    --Spammed with taunts
 --    --player colours are shuffled around
-
-
-
-
-
-
 
 function ReceivedLocations.ReceivedItemCheck(itemid)
       if itemid >= 1 and itemid <= 100 then
