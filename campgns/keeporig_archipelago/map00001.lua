@@ -8,6 +8,7 @@
 MapID = require("map_ids")
 BoxLocations = require("box_locations")
 SentLocations = require("sent_locations")
+CommandsMain = require("commands_main")
 --ReceivedLocations = require("received_locations")
 local map = {level_id = MapID.MAP_001.level}
 --can use Map.map_number instead
