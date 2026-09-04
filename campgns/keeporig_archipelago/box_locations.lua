@@ -44,6 +44,7 @@ function BoxLocations.SpawnBoxes(level_id)
         if not SentLocations.Has(id) then -- If it ISN'T in sent_locations , we've not sent it.
             Game.APBox[id] = AddObjectToLevel("SPECBOX_CUSTOM", (id % 100)+100, id, "PLAYER_NEUTRAL", 0) -- Action Points are limited to 256 I think, so each Archipelago action point on a level is 101+
             -- Would like to add a way to check if the item associated with this number is useful or filler, then display the correct graphics.
+            -- set gfx to ARCHIPELAGOITEMUSEFUL
             if not first then message = message .. ", " end
             message = message .. id
             first = false
