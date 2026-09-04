@@ -85,6 +85,7 @@ function BoxLocations.ActivateBoxes(level_id)
                 end
                 if not first2 then message2 = message2 .. "." end
                 QuickMessage(message2, "ARCHIPELAGO_ICON")
+                SentLocations.Save() --writes to AP_sent_locations_save.lua
                 Game.APBox[id] = nil
             end, id)
         else
