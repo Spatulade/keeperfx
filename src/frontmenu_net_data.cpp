@@ -17,6 +17,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include "kfx/renderer/RendererManager.h"
 #include "frontmenu_net.h"
 #include "globals.h"
 #include "bflib_basics.h"
@@ -35,6 +36,7 @@
 #include "frontend.h"
 #include "front_landview.h"
 #include "net_game.h"
+#include "net_lobby.h"
 #include "sprites.h"
 #include "custom_sprites.h"
 #include "post_inc.h"
@@ -114,8 +116,14 @@ struct GuiButtonInit frontend_net_start_buttons[] = {
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontnet_select_alliance,NULL,frontend_over_button,  1, 453, 186, 453, 186,  22, 26, frontnet_draw_alliance_button,     0, GUIStr_Empty, 0,  {77},    0, frontnet_maintain_alliance },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontnet_select_alliance,NULL,frontend_over_button,  2, 475, 186, 475, 186,  22, 26, frontnet_draw_alliance_button,     0, GUIStr_Empty, 0,  {77},    0, frontnet_maintain_alliance },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontnet_select_alliance,NULL,frontend_over_button,  3, 497, 186, 497, 186,  22, 26, frontnet_draw_alliance_button,     0, GUIStr_Empty, 0,  {77},    0, frontnet_maintain_alliance },
-  { LbBtnT_HoldableBtn,BID_DEFAULT, 0, 0, NULL,               NULL,   NULL,                    0, 284, 217, 284, 217, 240, 26, frontnet_draw_bottom_scroll_box_tab,0,GUIStr_Empty, 0,  {28},    0, NULL },
-  { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_toggle_computer_players,NULL,frontend_over_button,0,297,214,297,214,220,26, frontend_draw_computer_players,    0, GUIStr_Empty, 0, {103},    0, NULL },
+  
+  { LbBtnT_HoldableBtn,BID_DEFAULT, 0, 0, NULL,                    NULL,   NULL,                     0,305,217,305,217,220,26, frontnet_draw_bottom_scroll_box_tab,0,GUIStr_Empty, 0,  {28},    0, NULL },
+  { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_toggle_computer_players,NULL,frontend_over_button,0,315,214,315,214,200,26, frontend_draw_computer_players,    0, GUIStr_Empty, 0, {103},    0, NULL },
+  
+  
+  { LbBtnT_HoldableBtn,BID_DEFAULT, 0, 0, NULL,               NULL,  NULL,                     0, 85,217,85,217, 220, 26, frontnet_draw_bottom_scroll_box_tab,0,GUIStr_Empty, 0,  {28},    0, NULL }, //pack select background
+  { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontend_load_mp_mappacks,NULL,frontend_over_button,0, 95,214,95,214, 200, 26, frontend_draw_mp_mappack,           0,GUIStr_Empty, 0, {100},    0, NULL }, //pack select
+ 
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, NULL,               NULL,   NULL,                    0,  82, 246,  82, 246, 220, 26, frontnet_draw_scroll_box_tab,      0, GUIStr_Empty, 0,  {28},    0, NULL },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, NULL,               NULL,   NULL,                    0,  82, 272,  82, 272, 450,111, frontnet_draw_scroll_box,          0, GUIStr_Empty, 0,  {91},    0, NULL },
   { LbBtnT_HoldableBtn,BID_DEFAULT, 0, 0, frontnet_messages_up,NULL,  frontend_over_button,    0, 532, 271, 532, 271,  26, 14, frontnet_draw_slider_button,       0, GUIStr_Empty, 0,  {38},    0, frontnet_messages_up_maintain },
@@ -124,7 +132,7 @@ struct GuiButtonInit frontend_net_start_buttons[] = {
   { LbBtnT_HoldableBtn,BID_DEFAULT, 0, 0, NULL,               NULL,   NULL,                    0, 536, 285, 536, 285,  20, 88, frontnet_draw_messages_scroll_tab, 0, GUIStr_Empty, 0,  {40},    0, NULL },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, NULL,               NULL,   NULL,                    0,  82, 386,  82, 386, 459, 28, frontnet_draw_current_message,     0, GUIStr_Empty, 0,  {43},    0, NULL },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, NULL,               NULL,   NULL,                    0,  89, 273,  89, 273, 438,104, frontnet_draw_messages,            0, GUIStr_Empty, 0,  {44},    0, NULL },
-  { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, set_packet_start,   NULL,   frontend_over_button,    0,  49, 412,  49, 412, 247, 46, frontnet_draw_start_game_button,   0, GUIStr_Empty, 0,  {15},    0, frontnet_start_game_maintain },
+  { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, set_packet_start,   NULL,   frontend_over_button,    0,  49, 412,  49, 412, 247, 46, frontend_draw_small_menu_button,   0, GUIStr_Empty, 0,  {15},    0, frontnet_start_game_maintain },
   { LbBtnT_NormalBtn,  BID_DEFAULT, 0, 0, frontnet_return_to_session_menu,NULL,frontend_over_button,1, 345,412,345,412,247,46, frontend_draw_small_menu_button,   0, GUIStr_Empty, 0,  {16},    0, NULL },
   {-1,  BID_DEFAULT, 0, 0, NULL,               NULL,   NULL,                    0,   0,   0,   0,   0,   0,  0, NULL,                              0,           0,  0,   {0},    0, NULL },
 };
@@ -173,7 +181,7 @@ void frontnet_draw_session_selected(struct GuiButton *gbtn)
         i = frontend_button_caption_font(gbtn, 0);
         if (text != NULL)
         {
-            lbDisplay.DrawFlags = 0;
+            RendererSetDrawFlags(0);
             LbTextSetFont(frontend_font[i]);
             // Set drawing window and draw the text
             int tx_units_per_px;
@@ -210,7 +218,7 @@ void frontnet_draw_session_button(struct GuiButton *gbtn)
     int font_idx;
     font_idx = frontend_button_caption_font(gbtn,frontend_mouse_over_button);
     LbTextSetFont(frontend_font[font_idx]);
-    lbDisplay.DrawFlags = 0;
+    RendererSetDrawFlags(0);
     int tx_units_per_px;
     tx_units_per_px = gbtn->height * 16 / LbTextLineHeight();
     height = LbTextLineHeight() * tx_units_per_px / 16;

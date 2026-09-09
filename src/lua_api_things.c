@@ -26,6 +26,9 @@
 #include "magic_powers.h"
 #include "config_crtrstates.h"
 #include "creature_states_mood.h"
+#include "thing_stats.h"
+#include "local_camera.h"
+#include "light_data.h"
 
 #include "lua_base.h"
 #include "lua_params.h"
@@ -39,8 +42,6 @@ static int thing_set_field(lua_State *L);
 static int thing_get_field(lua_State *L);
 
 static const struct luaL_Reg thing_methods[];
-
-
 
 
 /**********************************************/
@@ -57,6 +58,28 @@ static int make_thing_zombie (lua_State *L)
 
     thing->alloc_flags |= TAlF_IsControlled;
 
+
+    return 0;
+}
+
+static int lua_set_velocity (lua_State *L)
+{
+    struct Thing *thing = luaL_checkThing(L, 1);
+    int32_t speed = luaL_checkinteger(L, 2);
+    int16_t angle_xy = thing->move_angle_xy;
+    int16_t angle_z = thing->move_angle_z;
+
+    if (!lua_isnoneornil(L, 3))
+        angle_xy = luaL_optCheckinteger(L, 3);
+    if (!lua_isnoneornil(L, 4))
+        angle_z = luaL_optCheckinteger(L, 4);
+
+    struct ComponentVector cvect;
+    angles_to_vector(angle_xy, angle_z, speed, &cvect);
+    thing->veloc_push_add.x.val += cvect.x;
+    thing->veloc_push_add.y.val += cvect.y;
+    thing->veloc_push_add.z.val += cvect.z;
+    thing->state_flags |= TF1_PushAdd;
 
     return 0;
 }
@@ -131,6 +154,23 @@ static int lua_kill_creature(lua_State *L)
     return 0;
 }
 
+static int lua_transform_creature(lua_State* L)
+{
+    struct Thing* thing = luaL_checkCreature(L, 1);
+    ThingModel crtr_id = luaL_checkNamedCommand(L, 2, creature_desc);
+    int16_t crtr_level = luaL_checkinteger(L, 3);
+
+    if ((crtr_level < 0) || (crtr_level > CREATURE_MAX_LEVEL))
+    {
+        SCRPTERRLOG("Invalid CREATURE LEVEL parameter");
+        return 0;
+    }
+
+    struct Thing* newtng = grow_up_creature(thing, crtr_id, crtr_level);
+    lua_pushThing(L, newtng);
+    return 1;
+}
+
 static int lua_stun_creature(lua_State* L)
 {
     struct Thing* thing = luaL_checkThing(L, 1);
@@ -141,6 +181,35 @@ static int lua_stun_creature(lua_State* L)
         cctrl->conscious_back_turns = luaL_checkinteger(L, 2);
     }
 
+    return 0;
+}
+
+static int lua_remove_creature_from_play(lua_State *L)
+{
+    struct Thing *thing = luaL_checkCreature(L, 1);
+    lua_Integer turns = luaL_checkinteger(L, 2);
+    luaL_argcheck(L, (turns > 0) && (turns <= INT32_MAX), 2, "turns must be between 1 and 2147483647");
+    if (thing_is_picked_up(thing)) {
+        return luaL_error(L, "creature is already out of play");
+    }
+    if (is_thing_some_way_controlled(thing)) {
+        prepare_to_controlled_creature_death(thing);
+    }
+    struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+    initialise_thing_state(thing, CrSt_CreatureOutOfPlay);
+    clear_flag(thing->state_flags, TF1_FallingIntoAbyss);
+    set_flag(cctrl->creature_state_flags, TF2_CreatureOutOfPlay);
+    clear_thing_acceleration(thing);
+    clear_thing_velocity(thing);
+    cctrl->wait_to_turn = get_gameturn() + (GameTurn)turns;
+    if (thing->light_id != 0) {
+        light_turn_light_off(thing->light_id);
+    }
+    if (thing->snd_emitter_id != 0) {
+        S3DDestroySoundEmitterAndSamples(thing->snd_emitter_id);
+        thing->snd_emitter_id = 0;
+    }
+    place_thing_in_creature_controlled_limbo(thing);
     return 0;
 }
 
@@ -235,19 +304,44 @@ static int thing_set_field(lua_State *L) {
     const char* key = luaL_checkstring(L, 2);
 
     //Fields working for all thing classes
-    if (strcmp(key, "orientation") == 0) {
+    if (strcmp(key, "orientation") == 0)
+    {
         thing->move_angle_xy = luaL_checkinteger(L, 3);
-
+        // Re-sync first-person camera with creature orientation
+        struct PlayerInfo* player = get_my_player();
+        if (!player_invalid(player)
+            && player->controlled_thing_idx == thing->index
+            && player->view_mode == PVM_CreatureView)
+        {
+            set_local_camera_destination(player);
+        }        
+    } else if (strcmp(key, "pitch") == 0) 
+    {
+        thing->move_angle_z = luaL_checkinteger(L, 3);
     } else if (strcmp(key, "owner") == 0) {
         PlayerNumber new_owner = luaL_checkPlayerSingle(L, 3);
         if (is_thing_some_way_controlled(thing)) {
             prepare_to_controlled_creature_death(thing);
         }
         change_creature_owner(thing, new_owner);
-
     } else if (strcmp(key, "health") == 0)
     {
-        thing->health = luaL_checkinteger(L, 3);
+        HitPoints new_health = luaL_checkinteger(L, 3);
+        if (thing_is_creature(thing))
+        {
+            HitPoints old_health = thing->health;
+            if (new_health > old_health)
+            {
+                apply_health_to_thing_and_display_health(thing, new_health - old_health);
+            } else if (new_health < old_health) 
+            {
+                apply_damage_to_thing(thing, old_health - new_health, -1);
+            }
+        }
+        else
+        {
+            thing->health = new_health;    // Doors, Hearts, Traps, ...
+        }
     } else if (strcmp(key, "pos") == 0) 
     {
         struct Coord3d pos;
@@ -371,6 +465,9 @@ static int thing_set_field(lua_State *L) {
         } else if (strcmp(key, "conscious_back_turns") == 0)
         {
             cctrl->conscious_back_turns = luaL_checkinteger(L, 3);
+        } else if (strcmp(key, "unsummon_duration") == 0)
+        {
+            cctrl->unsummon_turn = (get_gameturn() + luaL_checkinteger(L, 3));
         } else
         {
             return luaL_error(L, "Field '%s' is not writable on Creature thing", key);
@@ -391,6 +488,14 @@ static int thing_set_field(lua_State *L) {
         else if (strcmp(key, "shooting_finished_turn") == 0)
         {
             thing->trap.shooting_finished_turn = luaL_checkinteger(L, 3);
+        } else
+        {
+            return luaL_error(L, "Field '%s' is not writable on Trap thing", key);
+        }
+    } else if (thing_is_special_box(thing))
+    {
+        if (strcmp(key, "box_kind") == 0) {
+            thing->custom_box.box_kind = luaL_checkinteger(L, 3);
         } else
         {
             return luaL_error(L, "Field '%s' is not writable on Trap thing", key);
@@ -424,6 +529,8 @@ static int thing_get_field(lua_State *L) {
         lua_pushPos(L, &thing->mappos);
     } else if (strcmp(key, "orientation") == 0) {
         lua_pushinteger(L, thing->move_angle_xy);
+    } else if (strcmp(key, "pitch") == 0) {
+        lua_pushinteger(L, thing->move_angle_z);
     } else if (strcmp(key, "health") == 0) {
         lua_pushinteger(L, thing->health);
     } else if (strcmp(key, "anim_sprite") == 0) {
@@ -487,6 +594,8 @@ static int thing_get_field(lua_State *L) {
             lua_pushinteger(L, cctrl->hunger_level);
         } else if (strcmp(key, "hunger_loss") == 0) {
             lua_pushinteger(L, cctrl->hunger_loss);
+        } else if (strcmp(key, "lair") == 0) {
+            lua_pushThing(L, thing_get(cctrl->lairtng_idx));
         } else if (strcmp(key, "opponents_melee_count") == 0) {
             lua_pushinteger(L, cctrl->opponents_melee_count);
         } else if (strcmp(key, "opponents_ranged_count") == 0) {
@@ -501,6 +610,8 @@ static int thing_get_field(lua_State *L) {
             lua_pushinteger(L, cctrl->hand_blocked_turns);
         } else if (strcmp(key, "state") == 0) {
             lua_pushstring(L, get_conf_parameter_text(creatrstate_desc, thing->active_state));
+        } else if (strcmp(key, "state_besides_interruptions") == 0) {
+            lua_pushstring(L, get_conf_parameter_text(creatrstate_desc, get_creature_state_besides_interruptions(thing)));
         } else if (strcmp(key, "continue_state") == 0) {
             lua_pushstring(L, get_conf_parameter_text(creatrstate_desc, thing->continue_state));
         } else if (strcmp(key, "workroom") == 0) {
@@ -521,6 +632,10 @@ static int thing_get_field(lua_State *L) {
             lua_pushPlayer(L, cctrl->party.target_plyr_idx);
         } else if (strcmp(key, "conscious_back_turns") == 0) {
             lua_pushinteger(L, cctrl->conscious_back_turns);
+        } else if (strcmp(key, "unsummon_duration") == 0) {
+            lua_pushinteger(L, (max((cctrl->unsummon_turn - get_gameturn()),0)));
+        } else if (strcmp(key, "familiars") == 0) {
+            lua_pushFamiliarTable(L, thing);
         } else {
             return luaL_error(L, "Unknown field or method '%s' for Creature thing", key);
         }
@@ -537,11 +652,28 @@ static int thing_get_field(lua_State *L) {
         } else {
             return luaL_error(L, "Unknown field or method '%s' for Trap thing", key);
         }
+    } else if (thing_is_special_box(thing))
+    {
+        if (strcmp(key, "box_kind") == 0) {
+            lua_pushinteger(L, thing->custom_box.box_kind);
+        } else {
+            return luaL_error(L, "Unknown field or method '%s' for Special box thing", key);
+        }
     } else {
         return luaL_error(L, "Unknown or unavailable field or method '%s' for Thing", key);
     }
 
     return 1;
+}
+
+static int lua_is_in_enemy_custody(lua_State *L) {
+    struct Thing* thing = luaL_checkThing(L, 1);
+    if (!thing_is_creature(thing)) {
+        lua_pushboolean(L, false);
+    } else {
+        lua_pushboolean(L, creature_is_kept_in_custody_by_enemy(thing));
+    }
+    return 1; 
 }
 
 static int thing_eq(lua_State *L) {
@@ -603,16 +735,19 @@ static const struct luaL_Reg thing_methods[] = {
     {"walk_to"                      ,lua_creature_walk_to               },
     {"kill"                         ,lua_kill_creature                  },
     {"stun"                         ,lua_stun_creature                  },
+    {"remove_from_play"             ,lua_remove_creature_from_play     },
     {"destroy"                      ,lua_destroy_object                 },
     {"delete"                       ,lua_delete_thing                   },
+    {"transform"                    ,lua_transform_creature             },
     {"isValid"                      ,lua_is_valid                       },
-    
     {"transfer"                     ,lua_Transfer_creature              },
     {"level_up"                     ,lua_Level_up_creature              },
     {"teleport"                     ,lua_Teleport_creature              },
     {"change_owner"                 ,lua_Change_creature_owner          },
+    {"set_velocity"                 ,lua_set_velocity                   },
     {"get_annoyance"                ,lua_get_creature_annoyance         },
     {"set_annoyance"                ,lua_set_creature_annoyance         },
+    {"in_enemy_custody"             ,lua_is_in_enemy_custody            }, 
     {NULL, NULL}
 };
 

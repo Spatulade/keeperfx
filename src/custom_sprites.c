@@ -18,13 +18,17 @@
 /******************************************************************************/
 #include "pre_inc.h"
 #include "custom_sprites.h"
+#include "custom_zip.h"
 #include "creature_graphics.h"
 #include "front_simple.h"
 #include "engine_render.h"
 #include "bflib_fileio.h"
 #include "gui_draw.h"
+#include "gui_msgs.h"
+#include "config_strings.h"
 #include "frontend.h"
 #include "bflib_dernc.h"
+#include "net_checksums.h"
 #include "sprites.h"
 #include "config_spritecolors.h"
 #include <spng.h>
@@ -32,16 +36,13 @@
 #include <json-dom.h>
 #include <minizip/unzip.h>
 #include "post_inc.h"
+#include "bflib_sprite.h"
 
 // Performance tests
 // #define OUTER
 // #define INNER
 #if defined(OUTER) || defined(INNER)
-#include <SDL2/SDL.h>
-#endif
-
-#ifndef PATH_MAX
-#define PATH_MAX 4096
+#include <SDL3/SDL.h>
 #endif
 
 // Each part of RGB tuple of palette file is 1-63 actually
@@ -52,7 +53,6 @@ static short next_free_icon = 0;
 
 struct TbSpriteSheet * gui_panel_sprites = NULL;
 struct TbSpriteSheet * custom_sprites = NULL;
-struct NamedCommand *anim_names = NULL;
 
 short td_to_fp_sprite_add[KEEPERSPRITE_ADD_NUM];
 short fp_to_td_sprite_add[KEEPERSPRITE_ADD_NUM];
@@ -83,8 +83,23 @@ struct SpriteContext
 
 static struct NamedCommand added_sprites[KEEPERSPRITE_ADD_NUM];
 static struct NamedCommand added_icons[GUI_PANEL_SPRITES_NEW];
+static unsigned char added_icon_frame_count[GUI_PANEL_SPRITES_NEW];
 static int num_added_sprite = 0;
 static int num_added_icons = 0;
+
+#define MAX_CUSTOM_ENSIGNS 64
+
+struct CustomEnsignData
+{
+    char *zip_path;
+    char **files;
+    int file_count;
+    int sheet_index;
+};
+
+static struct NamedCommand added_ensigns[MAX_CUSTOM_ENSIGNS];
+static struct CustomEnsignData custom_ensign_data[MAX_CUSTOM_ENSIGNS];
+static int num_added_ensigns = 0;
 
 #define MAX_LENS_OVERLAYS 64
 static struct LensOverlayData added_lens_overlays[MAX_LENS_OVERLAYS];
@@ -96,11 +111,7 @@ static int num_added_lens_mists = 0;
 
 unsigned char base_pal[PALETTE_SIZE];
 
-int total_sprite_zip_count = 0;
-uint32_t sprite_zip_combined_checksum = 0;
-
-// Used to cheaply detect mismatched custom sprites between players; makes file order matter when combining checksums, without this XOR alone gives the same result regardless of order.
-#define ROL32_5(x) (((uint32_t)(x) << 5) | ((uint32_t)(x) >> 27))
+TbBigChecksum required_sprite_zip_checksums[REQUIRED_SPRITE_ZIP_COUNT];
 
 // Indicates what custom assets to load
 enum CustomLoadFlags {
@@ -111,25 +122,49 @@ enum CustomLoadFlags {
     /// @brief Lens overlays
     CLF_LensOverlays = 0x4,
     /// @brief Lens mists
-    CLF_LensMists = 0x8
+    CLF_LensMists = 0x8,
+    CLF_Ensigns = 0x10
 };
 
 static unsigned char big_scratch_data[1024*1024*16] = {0};
 unsigned char *big_scratch = big_scratch_data;
 
-static void compress_raw(struct TbHugeSprite *sprite, unsigned char *src_buf, int x, int y, int w, int h);
-
+static void compress_raw(struct TbHugeSprite *sprite, unsigned char *src_buf, int x, int y, int w, int h, const uint8_t *conversion_table);
+static uint8_t *create_rgb_to_pal_table(const uint8_t *palette);
+struct SheetLoadContext
+{
+    struct TbSpriteSheet *sheet;
+    const uint8_t *conversion_table;
+};
 static TbBool add_custom_sprite(const char *path);
 
-static TbBool
-add_custom_json(const char *path, const char *name, TbBool (*process)(const char *path, unzFile zip, VALUE *root));
-
+static TbBool add_custom_json(const char *path, const char *name, TbBool (*process)(const char *path, unzFile zip, VALUE *root));
+static TbBool add_custom_json_with_data(const char *path, const char *name, TbBool (*process)(const char *path, unzFile zip, VALUE *root, void *data), void *data);
+static size_t decode_png_to_sprite(unzFile zip, const char *path, const char *subpath, struct TbHugeSprite *sprite, const uint8_t *conversion_table);
+static TbBool process_sheet(const char *path, unzFile zip, VALUE *root, void *data);
 static TbBool process_lens_overlay(const char *path, unzFile zip, VALUE *root);
 static TbBool process_lens_mist(const char *path, unzFile zip, VALUE *root);
+static TbBool process_ensign(const char *path, unzFile zip, VALUE *root);
 
 static TbBool process_icon(const char *path, unzFile zip, VALUE *root);
 
 static int cmp_named_command(const void *a, const void *b);
+
+static void clear_lens_assets(void)
+{
+    for (int i = 0; i < num_added_lens_overlays; i++) {
+        free(added_lens_overlays[i].name);
+        free(added_lens_overlays[i].data);
+    }
+    for (int i = 0; i < num_added_lens_mists; i++) {
+        free(added_lens_mists[i].name);
+        free(added_lens_mists[i].data);
+    }
+    num_added_lens_overlays = 0;
+    num_added_lens_mists = 0;
+    memset(added_lens_overlays, 0, sizeof(added_lens_overlays));
+    memset(added_lens_mists, 0, sizeof(added_lens_mists));
+}
 
 static unsigned char bad_icon_data[] = // 16x16
         {
@@ -154,73 +189,8 @@ static unsigned char bad_icon_data[] = // 16x16
 const struct TbSprite bad_icon = { bad_icon_data, 16, 16 };
 short bad_icon_id = INT16_MAX;
 
-/*
- * Speedup zip stuff
- * We postulate only one zip file loaded at once
- */
-static VALUE zip_cache_v;
-static VALUE *zip_cache = &zip_cache_v;
-
-static int fastUnzLocateFile(unzFile zip, const char *szFileName, int iCaseSensitivity)
-{
-    //return unzLocateFile(file, szFileName, iCaseSensitivity);
-    char seek_for[PATH_MAX];
-    strncpy(seek_for, szFileName, PATH_MAX - 1);
-    make_lowercase(seek_for);
-    VALUE *rec = value_dict_get(zip_cache, seek_for);
-    if (rec == NULL)
-        return UNZ_END_OF_LIST_OF_FILE;
-    unz64_file_pos file_pos = {
-            .pos_in_zip_directory = value_int64(value_array_get(rec, 0)),
-            .num_of_file = value_int64(value_array_get(rec, 1))
-    };
-    return unzGoToFilePos64(zip, &file_pos);
-}
-
-/*
- * Construct a cache for files.
- * Also if there is no indexFile just return instead
- * */
-static int fastUnzConstructCache(unzFile zip)
-{
-    char szCurrentFileName[PATH_MAX];
-    if (value_type(zip_cache) != VALUE_NULL)
-    {
-        ERRORLOG("Zip cache is not clear!");
-    }
-    value_init_dict(zip_cache);
-
-    for (int err = unzGoToFirstFile(zip);
-         err == UNZ_OK;
-         err = unzGoToNextFile(zip))
-    {
-        if (UNZ_OK != unzGetCurrentFileInfo64(zip, NULL,
-                                              szCurrentFileName, sizeof(szCurrentFileName) - 1,
-                                              NULL, 0, NULL, 0)
-                )
-        {
-            continue;
-        }
-        make_lowercase(szCurrentFileName);
-
-        unz64_file_pos file_pos;
-        unzGetFilePos64(zip, &file_pos);
-
-        VALUE *rec = value_dict_add(zip_cache, szCurrentFileName);
-        value_init_array(rec);
-        value_init_int64(value_array_append(rec), file_pos.pos_in_zip_directory);
-        value_init_int64(value_array_append(rec), file_pos.num_of_file);
-    }
-    return UNZ_OK;
-}
-
-static int fastUnzClearCache()
-{
-    value_fini(zip_cache);
-    return 0;
-}
-
-/* end of zip stuff */
+const unsigned int normal_load_flags = CLF_Sprites | CLF_Icons | CLF_LensOverlays | CLF_LensMists;
+const unsigned int campaign_load_flags = CLF_Ensigns;
 
 static int cmp_named_command(const void *a, const void *b)
 {
@@ -230,52 +200,61 @@ static int cmp_named_command(const void *a, const void *b)
     return strcasecmp(val_a->name, val_b->name);
 }
 
+struct TbSpriteSheet *load_custom_sheet_from_zip(const char *path, const unsigned char *palette) {
+    if (path == NULL || path[0] == '\0' || palette == NULL) return NULL;
+    struct TbSpriteSheet *sheet = create_spritesheet();
 
-static uint32_t compute_zip_checksum(const char *path)
-{
-    long file_length = LbFileLength(path);
-    if (file_length <= 0) {
-        return 0;
+    if (sheet == NULL)
+        return NULL;
+    const uint8_t *conversion_table = create_rgb_to_pal_table(palette);
+        if (conversion_table == NULL)
+        {
+            free_spritesheet(&sheet);
+            return NULL;
+        }
+
+    struct SheetLoadContext context = {
+        .sheet = sheet,
+        .conversion_table = conversion_table,
+        };
+
+    if (!add_custom_json_with_data(path, "ensigns.json", process_sheet, &context))
+    {
+        ERRORLOG("add_custom_json_with_data failed");
+        free((void *)conversion_table);
+        free_spritesheet(&sheet);
+        return NULL;
     }
-    TbFileHandle handle = LbFileOpen(path, Lb_FILE_MODE_READ_ONLY);
-    if (handle == NULL) {
-        return 0;
-    }
-    unsigned char *buffer = malloc(file_length);
-    if (buffer == NULL) {
-        LbFileClose(handle);
-        return 0;
-    }
-    LbFileRead(handle, buffer, file_length);
-    LbFileClose(handle);
-    uint32_t checksum = 0;
-    for (long i = 0; i < file_length; i++) {
-        checksum = ROL32_5(checksum) ^ buffer[i];
-    }
-    free(buffer);
-    return checksum;
+    free((void *)conversion_table);
+    return sheet;
 }
 
-static int load_file_sprites(const char *path, const char *file_desc)
+
+static int load_file_sprites(const char *path, const char *file_desc, unsigned int load_flags)
 {
     SYNCDBG(8, "Starting");
     int add_flag = 0;
-    if (add_custom_sprite(path))
+    if (load_flags & CLF_Sprites && add_custom_sprite(path))
     {
         add_flag |= CLF_Sprites;
     }
 
-    if (add_custom_json(path, "icons.json", &process_icon))
+    if (load_flags & CLF_Icons && add_custom_json(path, "icons.json", &process_icon))
     {
         add_flag |= CLF_Icons;
     }
 
-    if (add_custom_json(path, "lenses.json", &process_lens_overlay))
+    if (load_flags & CLF_Ensigns && add_custom_json(path, "ensigns.json", &process_ensign))
+    {
+        add_flag |= CLF_Ensigns;
+    }
+
+    if (load_flags & CLF_LensOverlays && add_custom_json(path, "lenses.json", &process_lens_overlay))
     {
         add_flag |= CLF_LensOverlays;
     }
 
-    if (add_custom_json(path, "mists.json", &process_lens_mist))
+    if (load_flags & CLF_LensMists && add_custom_json(path, "mists.json", &process_lens_mist))
     {
         add_flag |= CLF_LensMists;
     }
@@ -299,6 +278,14 @@ static int load_file_sprites(const char *path, const char *file_desc)
         {
             SYNCDBG(0, "Unable to load per-map icons from %s", file_desc);
         }
+        if (add_flag & CLF_Ensigns)
+        {
+            JUSTLOG("Loaded custom ensign definitions from %s", file_desc);
+        }
+        else
+        {
+            SYNCDBG(0, "Unable to load custom ensign definitions from %s", file_desc);
+        }
 
         if (add_flag & CLF_LensOverlays)
         {
@@ -318,43 +305,85 @@ static int load_file_sprites(const char *path, const char *file_desc)
         }
     }
 
-    sprite_zip_combined_checksum = ROL32_5(sprite_zip_combined_checksum) ^ compute_zip_checksum(path);
-    total_sprite_zip_count++;
-
     return add_flag;
 }
 
-static void load_dir_sprites(const char *dir_path, const char *dir_desc)
+static void load_dir_sprites(const char *dir_path, const char *dir_desc, unsigned int load_flags)
 {
     SYNCDBG(8, "Starting");
-    if (dir_path == NULL || dir_path[0] == 0)
+    if (dir_path == NULL || dir_path[0] == 0) {
         return;
+    }
     char full_path[1024] = {0};
     sprintf(full_path, "%s/%s", dir_path, "*.zip");
     struct TbFileEntry fe;
-    struct TbFileFind * ff = LbFileFindFirst(full_path, &fe);
-    int cnt_zip = 0, cnt_sprite = 0, cnt_icon = 0;
+    struct TbFileFind *ff = LbFileFindFirst(full_path, &fe);
+    int cnt_zip = 0, cnt_sprite = 0, cnt_icon = 0, cnt_ensign = 0;
     if (ff) {
         do {
             sprintf(full_path, "%s/%s", dir_path, fe.Filename);
-            int add_flag = load_file_sprites(full_path, NULL);
-            if (add_flag & CLF_Sprites)
+            int add_flag = load_file_sprites(full_path, NULL, load_flags);
+            if (add_flag & CLF_Sprites) {
                 cnt_sprite++;
-            if (add_flag & CLF_Icons)
+            }
+            if (add_flag & CLF_Icons) {
                 cnt_icon++;
+            }
+            if (add_flag & CLF_Ensigns) {
+                cnt_ensign++;
+            }
             cnt_zip++;
         } while (LbFileFindNext(ff, &fe) >= 0);
         LbFileFindEnd(ff);
 
-        if (dir_desc != NULL)
-            LbJustLog("Found %d sprite zip file(s) from %s, loaded %d with animations and %d with icons. Used %d/%d sprite slots.\n", cnt_zip, dir_desc, cnt_sprite, cnt_icon, next_free_sprite, KEEPERSPRITE_ADD_NUM);
+        if (dir_desc != NULL) {
+            LbJustLog("Found %d sprite zip file(s) from %s, loaded %d with animations, %d with icons and %d with ensigns. Used %d/%d sprite slots.\n", cnt_zip, dir_desc, cnt_sprite, cnt_icon, cnt_ensign, next_free_sprite, KEEPERSPRITE_ADD_NUM);
+        }
     }
+}
+
+void show_ignored_fxdata_zip_messages(void)
+{
+    char *dname = prepare_file_path(FGrp_FxData, NULL);
+    if (dname == NULL || dname[0] == 0) {
+        return;
+    }
+    char full_path[1024] = {0};
+    sprintf(full_path, "%s/%s", dname, "*.zip");
+    struct TbFileEntry fe;
+    struct TbFileFind *ff = LbFileFindFirst(full_path, &fe);
+    if (ff == NULL) {
+        return;
+    }
+    do {
+        int zip_is_required = 0;
+        for (int i = 0; i < REQUIRED_SPRITE_ZIP_COUNT; i++) {
+            if (strcasecmp(fe.Filename, required_sprite_zips[i]) == 0) {
+                zip_is_required = 1;
+                break;
+            }
+        }
+        if (zip_is_required != 0) {
+            continue;
+        }
+        WARNLOG("/fxdata/%s was not loaded. Please install it as a mod inside the /mods/ folder.", fe.Filename);
+        message_add(MsgType_Blank, 0, get_string(GUIStr_FxdataZipInstallAsMod));
+        message_add_fmt(MsgType_Blank, 0, get_string(GUIStr_FxdataZipNotLoaded), fe.Filename);
+    } while (LbFileFindNext(ff, &fe) >= 0);
+    LbFileFindEnd(ff);
+}
+
+void load_sprites_for_multi_front(LevelNumber lvnum)
+{
+    char *fname = prepare_file_fmtpath(get_level_fgroup(lvnum), "map%05lu.zip", lvnum);
+    if (LbFileExists(fname))
+        load_file_sprites(fname, "lof map file", campaign_load_flags);
 }
 
 /* @comment
  *     The loading items of init_custom_sprites and load_sprites_for_mod need to be consistent.
  */
-static void load_sprites_for_mod(LevelNumber lvnum, const struct ModConfigItem *mod_item)
+static void load_sprites_for_mod(LevelNumber lvnum, const struct ModConfigItem *mod_item, unsigned int load_flags)
 {
 
     const struct ModExistState *mod_state = &mod_item->state;
@@ -368,7 +397,7 @@ static void load_sprites_for_mod(LevelNumber lvnum, const struct ModConfigItem *
         if (strlen(dname) > 0)
         {
             sprintf(desc, "Mod[%s] FxData dir", mod_item->name);
-            load_dir_sprites(dname, desc);
+            load_dir_sprites(dname, desc, load_flags);
         }
     }
 
@@ -378,7 +407,7 @@ static void load_sprites_for_mod(LevelNumber lvnum, const struct ModConfigItem *
         if (strlen(dname) > 0)
         {
             sprintf(desc, "Mod[%s] CmpgConfig dir", mod_item->name);
-            load_dir_sprites(dname, desc);
+            load_dir_sprites(dname, desc, load_flags);
         }
     }
 
@@ -388,12 +417,12 @@ static void load_sprites_for_mod(LevelNumber lvnum, const struct ModConfigItem *
         if (strlen(fname) > 0 && LbFileExists(fname))
         {
             sprintf(desc, "Mod[%s] CmpgLvls file", mod_item->name);
-            load_file_sprites(fname, desc);
+            load_file_sprites(fname, desc, load_flags);
         }
     }
 }
 
-static void load_sprites_for_mod_list(LevelNumber lvnum, const struct ModConfigItem *mod_items, long mod_cnt)
+static void load_sprites_for_mod_list(LevelNumber lvnum, const struct ModConfigItem *mod_items, long mod_cnt, unsigned int load_flags)
 {
     for (long i=0; i<mod_cnt; i++)
     {
@@ -401,20 +430,48 @@ static void load_sprites_for_mod_list(LevelNumber lvnum, const struct ModConfigI
         if (mod_item->state.mod_dir == 0)
             continue;
 
-        load_sprites_for_mod(lvnum, mod_item);
+        load_sprites_for_mod(lvnum, mod_item, load_flags);
     }
 }
 
 /* @comment
  *     The loading items of init_custom_sprites and load_sprites_for_mod need to be consistent.
  */
+static void clear_custom_ensigns(void)
+{
+    for (int i = 0; i < num_added_ensigns; i++)
+    {
+        if (added_ensigns[i].name != NULL)
+        {
+            free((char *) added_ensigns[i].name);
+            added_ensigns[i].name = NULL;
+        }
+        free(custom_ensign_data[i].zip_path);
+        for (int j = 0; j < custom_ensign_data[i].file_count; j++)
+            free(custom_ensign_data[i].files[j]);
+        free(custom_ensign_data[i].files);
+    }
+    num_added_ensigns = 0;
+    memset(added_ensigns, 0, sizeof(added_ensigns));
+    memset(custom_ensign_data, 0, sizeof(custom_ensign_data));
+}
+
+void init_custom_campaign_sprites(const char *dir_path, const char *dir_desc)
+{    
+    clear_custom_ensigns();
+    load_dir_sprites(dir_path, dir_desc, campaign_load_flags);
+    if (mods_conf.after_campaign_cnt > 0)
+    {
+        load_sprites_for_mod_list(-1, mods_conf.after_campaign_item, mods_conf.after_campaign_cnt, campaign_load_flags);
+    }
+}
+
 void init_custom_sprites(LevelNumber lvnum)
 {
     SYNCDBG(8, "Starting");
     free_spritesheet(&custom_sprites);
     custom_sprites = create_spritesheet();
-    total_sprite_zip_count = 0;
-    sprite_zip_combined_checksum = 0;
+    memset(required_sprite_zip_checksums, 0, sizeof(required_sprite_zip_checksums));
     // This is a workaround because get_selected_level_number is zeroed on res change
     if (lvnum == SPRITE_LAST_LEVEL)
     {
@@ -461,39 +518,66 @@ void init_custom_sprites(LevelNumber lvnum)
     memset(added_icons, 0, sizeof(added_icons));
     next_free_icon = 0;
 
+    clear_lens_assets();
+
     // Clear creature table (there sprites live)
     memset(creature_table_add, 0, sizeof(creature_table_add));
+    memset(td_to_fp_sprite_add, 0, sizeof(td_to_fp_sprite_add));
+    memset(fp_to_td_sprite_add, 0, sizeof(fp_to_td_sprite_add));
     next_free_sprite = 0;
-
-    if (anim_names != NULL)
-    {
-        free(anim_names);
-    }
 
 
     char *dname = prepare_file_path(FGrp_FxData, NULL);
-    load_dir_sprites(dname, "Main FxData dir");
+    if (dname == NULL || dname[0] == 0) {
+        ERRORLOG("Required Main FxData dir is missing");
+    } else {
+        char full_path[1024] = {0};
+        char loaded_zip_names[1024] = {0};
+        int loaded_zip_names_len = 0;
+        const char *loaded_zip_name_sep = "";
+        int cnt_sprite = 0, cnt_icon = 0;
+        for (int i = 0; i < REQUIRED_SPRITE_ZIP_COUNT; i++) {
+            sprintf(full_path, "%s/%s", dname, required_sprite_zips[i]);
+            if (!LbFileExists(full_path)) {
+                ERRORLOG("Required /fxdata/%s is missing", required_sprite_zips[i]);
+                continue;
+            }
+            required_sprite_zip_checksums[i] = calculate_file_checksum(full_path);
+            int add_flag = load_file_sprites(full_path, NULL, normal_load_flags);
+            if (add_flag & CLF_Sprites) {
+                cnt_sprite++;
+            }
+            if (add_flag & CLF_Icons) {
+                cnt_icon++;
+            }
+            if (loaded_zip_names_len < (int)sizeof(loaded_zip_names)) {
+                loaded_zip_names_len += snprintf(&loaded_zip_names[loaded_zip_names_len], sizeof(loaded_zip_names) - loaded_zip_names_len, "%s%s", loaded_zip_name_sep, required_sprite_zips[i]);
+            }
+            loaded_zip_name_sep = ", ";
+        }
+        LbJustLog("Loaded /fxdata/ sprite zips: %s, sprite slots: %d/%d, animations: %d, icons: %d.\n", loaded_zip_names, next_free_sprite, KEEPERSPRITE_ADD_NUM, cnt_sprite, cnt_icon);
+    }
 
     if (mods_conf.after_base_cnt > 0)
     {
-        load_sprites_for_mod_list(lvnum, mods_conf.after_base_item, mods_conf.after_base_cnt);
+        load_sprites_for_mod_list(lvnum, mods_conf.after_base_item, mods_conf.after_base_cnt, normal_load_flags);
     }
 
     dname = prepare_file_path(FGrp_CmpgConfig, NULL);
-    load_dir_sprites(dname, "Main CmpgConfig dir");
+    load_dir_sprites(dname, "Main CmpgConfig dir", normal_load_flags);
 
     if (mods_conf.after_campaign_cnt > 0)
     {
-        load_sprites_for_mod_list(lvnum, mods_conf.after_campaign_item, mods_conf.after_campaign_cnt);
+        load_sprites_for_mod_list(lvnum, mods_conf.after_campaign_item, mods_conf.after_campaign_cnt, normal_load_flags);
     }
 
     char *fname = prepare_file_fmtpath(get_level_fgroup(lvnum), "map%05lu.zip", lvnum);
     if (LbFileExists(fname))
-        load_file_sprites(fname, "Main CmpgLvls file");
+        load_file_sprites(fname, "Main CmpgLvls file", normal_load_flags);
 
     if (mods_conf.after_map_cnt > 0)
     {
-        load_sprites_for_mod_list(lvnum, mods_conf.after_map_item, mods_conf.after_map_cnt);
+        load_sprites_for_mod_list(lvnum, mods_conf.after_map_item, mods_conf.after_map_cnt, normal_load_flags);
     }
 
 }
@@ -754,63 +838,10 @@ static int read_png_info(unzFile zip, const char *path, struct SpriteContext *co
 static int read_png_icon(unzFile zip, const char *path, const char *subpath, int *icon_ptr)
 {
     struct TbHugeSprite sprite = {0};
-    size_t out_size;
+    size_t sz = decode_png_to_sprite(zip, path, subpath, &sprite, NULL);
 
-    spng_ctx *ctx = NULL;
-    ctx = spng_ctx_new(0);
-    spng_set_crc_action(ctx, SPNG_CRC_USE, SPNG_CRC_USE);
-
-    size_t limit = 1024 * 1024 * 2;
-    spng_set_chunk_limits(ctx, limit, limit);
-
-    spng_set_png_stream(ctx, zip_read_fn, (void *) zip);
-    struct spng_ihdr ihdr;
-    int r = spng_get_ihdr(ctx, &ihdr);
-
-    if (r)
-    {
-        ERRORLOG("spng_get_ihdr() error: %s", spng_strerror(r));
-        spng_ctx_free(ctx);
+    if (sz == 0)
         return 0;
-    }
-
-    if (ihdr.bit_depth != 8)
-    {
-        ERRORLOG("Wrong spec: %s/%s should be 8bit truecolor or indexed .png", path, subpath);
-        spng_ctx_free(ctx);
-        return 0;
-    }
-    struct spng_plte plte = {0};
-    r = spng_get_plte(ctx, &plte);
-
-    sprite.SWidth = ihdr.width;
-    sprite.SHeight = ihdr.height;
-
-    int fmt = SPNG_FMT_RGBA8; // for indexed should be SPNG_FMT_PNG
-
-    spng_decoded_image_size(ctx, fmt, &out_size);
-    if (limit < out_size) // Image is too big
-    {
-        ERRORLOG("Unable to decode %s error: %s", path, spng_strerror(r));
-        spng_ctx_free(ctx);
-        return 0;
-    }
-
-    unsigned char *dst_buf = big_scratch;
-    spng_decode_image(ctx, dst_buf, out_size, fmt, SPNG_DECODE_TRNS);
-
-    if (sprite.SWidth >= 255 || sprite.SHeight >= 255)
-    {
-        ERRORLOG("Sprites more than 255x255 are not supported");
-        return 0;
-    }
-
-    size_t sz = (sprite.SWidth + 2) * (sprite.SHeight + 3);
-    sprite.Data = malloc(sz);
-
-    compress_raw(&sprite, dst_buf, 0, 0, sprite.SWidth, sprite.SHeight);
-
-    spng_ctx_free(ctx);
 
     if (next_free_icon >= GUI_PANEL_SPRITES_NEW)
     {
@@ -822,6 +853,130 @@ static int read_png_icon(unzFile zip, const char *path, const char *subpath, int
     free(sprite.Data);
     *icon_ptr = next_free_icon + GUI_PANEL_SPRITES_COUNT;
     next_free_icon++;
+
+    return 1;
+}
+
+static size_t decode_png_to_sprite(unzFile zip, const char *path, const char *subpath, struct TbHugeSprite *sprite, const uint8_t *conversion_table)
+{
+    size_t out_size;
+
+    if (sprite == NULL)
+        return 0;
+
+    memset(sprite, 0, sizeof(*sprite));
+
+    spng_ctx *ctx = spng_ctx_new(0);
+    if (ctx == NULL)
+    {
+        ERRORLOG("Unable to create PNG context for %s/%s", path, subpath);
+        return 0;
+    }
+
+    spng_set_crc_action(ctx, SPNG_CRC_USE, SPNG_CRC_USE);
+
+    size_t limit = 1024 * 1024 * 2;
+    spng_set_chunk_limits(ctx, limit, limit);
+
+    spng_set_png_stream(ctx, zip_read_fn, (void *)zip);
+
+    struct spng_ihdr ihdr;
+
+    int r = spng_get_ihdr(ctx, &ihdr);
+    if (r)
+    {
+        ERRORLOG("spng_get_ihdr() error for %s/%s: %s",
+                 path, subpath, spng_strerror(r));
+        spng_ctx_free(ctx);
+        return 0;
+    }
+
+    if (ihdr.bit_depth != 8)
+    {
+        ERRORLOG("Wrong spec: %s/%s should be 8bit truecolor or indexed .png",
+                 path, subpath);
+        spng_ctx_free(ctx);
+        return 0;
+    }
+
+    sprite->SWidth = ihdr.width;
+    sprite->SHeight = ihdr.height;
+
+    if (sprite->SWidth >= 255 || sprite->SHeight >= 255)
+    {
+        ERRORLOG("Sprites more than 255x255 are not supported: %s/%s",
+                 path, subpath);
+        spng_ctx_free(ctx);
+        return 0;
+    }
+
+    int fmt = SPNG_FMT_RGBA8;
+
+    r = spng_decoded_image_size(ctx, fmt, &out_size);
+    if (r)
+    {
+        ERRORLOG("Unable to determine decoded size for %s/%s: %s",
+                 path, subpath, spng_strerror(r));
+        spng_ctx_free(ctx);
+        return 0;
+    }
+
+    if (out_size > limit)
+    {
+        ERRORLOG("Decoded PNG is too large: %s/%s",
+                 path, subpath);
+        spng_ctx_free(ctx);
+        return 0;
+    }
+
+    unsigned char *dst_buf = big_scratch;
+
+    r = spng_decode_image(ctx, dst_buf, out_size, fmt, SPNG_DECODE_TRNS);
+    if (r)
+    {
+        ERRORLOG("Unable to decode %s/%s: %s",
+                 path, subpath, spng_strerror(r));
+        spng_ctx_free(ctx);
+        return 0;
+    }
+
+    size_t sz = (sprite->SWidth + 2) * (sprite->SHeight + 3);
+
+    sprite->Data = malloc(sz);
+    if (sprite->Data == NULL)
+    {
+        ERRORLOG("Unable to allocate sprite data for %s/%s",
+                 path, subpath);
+        spng_ctx_free(ctx);
+        return 0;
+    }
+
+    compress_raw(sprite, dst_buf,
+                 0, 0,
+                 sprite->SWidth,
+                 sprite->SHeight,
+                 conversion_table);
+
+    spng_ctx_free(ctx);
+
+    return sz;
+}
+
+static int read_png_to_sheet(unzFile zip, const char *path, const char *subpath, struct TbSpriteSheet *sheet, const uint8_t *conversion_table)
+{
+    struct TbHugeSprite sprite = {0};
+    size_t sz = decode_png_to_sprite(zip, path, subpath, &sprite, conversion_table);
+    
+    if (sz == 0)
+        return 0;
+
+    if (!add_sprite(sheet, sprite.SWidth, sprite.SHeight, sz, sprite.Data))
+    {
+        free(sprite.Data);
+        return 0;
+    }
+
+    free(sprite.Data);
 
     return 1;
 }
@@ -909,7 +1064,7 @@ static int read_png_data(unzFile zip, const char *path, struct SpriteContext *co
     size_t sz = (dst_w + 2) * (dst_h + 3);
     keepersprite_add[sprite_idx] = malloc(sz);
     context->sprite.Data = keepersprite_add[sprite_idx];
-    compress_raw(&context->sprite, dst_buf, context->x, context->y, dst_w, dst_h);
+    compress_raw(&context->sprite, dst_buf, context->x, context->y, dst_w, dst_h, NULL);
     struct KeeperSprite *ksprite = &creature_table_add[sprite_idx];
 
     if (context->ksp_first == NULL)
@@ -965,7 +1120,7 @@ static int read_png_data(unzFile zip, const char *path, struct SpriteContext *co
 }
 #pragma clang diagnostic pop
 
-static void convert_row(unsigned char *dst_buf, uint32_t *src_buf, int len)
+static void convert_row(unsigned char *dst_buf, uint32_t *src_buf, int len, const uint8_t *conversion_table)
 {
     for (int i = 0; i < len; i++)
     {
@@ -974,7 +1129,7 @@ static void convert_row(unsigned char *dst_buf, uint32_t *src_buf, int len)
             (((color >> 2) & (MAX_COLOR_VALUE - 1)) << 0) +
             (((color >> 10) & (MAX_COLOR_VALUE - 1)) << 6) +
             (((color >> 18) & (MAX_COLOR_VALUE - 1)) << 12);
-        *dst_buf++ = rgb_to_pal_table[key];
+        *dst_buf++ = conversion_table[key];
     }
 }
 
@@ -1001,6 +1156,20 @@ static uint8_t nearest_color(uint32_t value, const uint8_t * palette)
     }
     return nearest;
 }
+static uint8_t *create_rgb_to_pal_table(const uint8_t *palette)
+{
+    const uint32_t table_size = MAX_COLOR_VALUE * MAX_COLOR_VALUE * MAX_COLOR_VALUE;
+    uint8_t *table = calloc(table_size, 1);
+    if (!table) {
+        ERRORLOG("Cannot allocate rgb conversion table");    
+        return NULL;
+    }
+
+    for (uint32_t i = 0; i < table_size; ++i) {
+        table[i] = nearest_color(i, palette);
+    }
+    return table;
+}
 
 static void load_rgb_to_pal_table()
 {
@@ -1026,15 +1195,21 @@ static void load_rgb_to_pal_table()
         return;
     }
     // populate table
-    for (uint32_t i = 0; i < table_size; ++i) {
-        rgb_to_pal_table[i] = nearest_color(i, palette);
-    }
+    rgb_to_pal_table = create_rgb_to_pal_table(palette);
 }
 
-static void compress_raw(struct TbHugeSprite *sprite, unsigned char *inp_buf, int x, int y, int w, int h)
+static void compress_raw(struct TbHugeSprite *sprite, unsigned char *inp_buf, int x, int y, int w, int h, const uint8_t *conversion_table)
 {
     #define TEST_TRANSP(x) ((x & 0xFF000000u) < 0x40000000u)
-    load_rgb_to_pal_table();
+    if (conversion_table == NULL)
+    {
+        load_rgb_to_pal_table();
+        conversion_table = rgb_to_pal_table;
+    }
+    if (conversion_table == NULL)
+    {
+        return;
+    }
     unsigned char *buf = sprite->Data;
     uint32_t *src_buf = (uint32_t *) inp_buf;
     TbBool is_transp;
@@ -1070,7 +1245,7 @@ static void compress_raw(struct TbHugeSprite *sprite, unsigned char *inp_buf, in
                     {
                         *buf = len;
                         buf++;
-                        convert_row(buf, src_buf - len, len);
+                        convert_row(buf, src_buf - len, len, conversion_table);
                         buf += len;
                     }
 
@@ -1087,7 +1262,7 @@ static void compress_raw(struct TbHugeSprite *sprite, unsigned char *inp_buf, in
         {
             *buf = len;
             buf++;
-            convert_row(buf, src_buf - len, len);
+            convert_row(buf, src_buf - len, len, conversion_table);
             buf += len;
         }
         *buf = 0;
@@ -1227,7 +1402,7 @@ collect_sprites(const char *path, unzFile zip, const char *blender_scene, struct
                     store_ksp_fc = context->ksp_first->FramesCount;
 #ifdef INNER
                 fprintf(stderr, "F:%s/%s\n", path, name);
-                fprintf(stderr, "A:%d\n", SDL_GetTicks());
+                fprintf(stderr, "A:%u\n", (unsigned)SDL_GetTicks());
 #endif
                 if (!read_png_data(zip, path, context, name, is_fp, node, itm))
                 {
@@ -1243,7 +1418,7 @@ collect_sprites(const char *path, unzFile zip, const char *blender_scene, struct
                     return 1;
                 }
 #ifdef INNER
-                fprintf(stderr, "B:%d\n", SDL_GetTicks());
+                fprintf(stderr, "B:%u\n", (unsigned)SDL_GetTicks());
 #endif
                 if (UNZ_OK != unzCloseCurrentFile(zip))
                 {
@@ -1334,6 +1509,98 @@ static int process_sprite_from_list(const char *path, unzFile zip, int idx, VALU
     return 1;
 }
 
+static TbBool add_custom_json_with_data(
+    const char *path,
+    const char *name,
+    TbBool (*process)(const char *path, unzFile zip, VALUE *root, void *data),
+    void *data)
+    {
+        SYNCDBG(8, "Starting");
+        unz_file_info64 zip_info = {0};
+        VALUE root;
+        JSON_INPUT_POS json_input_pos;
+        unzFile zip = unzOpen(path);
+
+        if (zip == NULL)
+        {
+            JUSTLOG("add_custom_json_with_data zip == NULL");
+            return 0;
+        }
+
+        if (UNZ_OK != fastUnzConstructCache(zip))
+        {
+            JUSTLOG("add_custom_json_with_data UNZ_OK != fastUnzConstructCache(zip)");
+            goto end;
+        }
+
+        JUSTLOG("add_custom_json_with_data name - %s",name);
+        if (UNZ_OK != fastUnzLocateFile(zip, name, 0))
+        {
+            JUSTLOG("add_custom_json_with_data UNZ_OK != fastUnzLocateFile(zip, name, 0)");
+            goto end;
+        }
+
+        if (UNZ_OK != unzGetCurrentFileInfo64(zip, &zip_info, NULL, 0, NULL, 0, NULL, 0))
+        {
+            JUSTLOG("add_custom_json_with_data UNZ_OK != unzGetCurrentFileInfo64(zip, &zip_info, NULL, 0, NULL, 0, NULL, 0)");
+            goto end;
+        }
+
+        if (zip_info.uncompressed_size >= 1024 * 1024)
+        {
+            JUSTLOG("add_custom_json_with_data zip_info.uncompressed_size >= 1024 * 1024");
+            WARNLOG("File too big %s/%s", path, name);
+            goto end;
+        }
+
+        if (UNZ_OK != unzOpenCurrentFile(zip))
+        {
+            JUSTLOG("add_custom_json_with_data UNZ_OK != unzOpenCurrentFile(zip)");
+            goto end;
+        }
+
+        if (unzReadCurrentFile(zip, big_scratch, zip_info.uncompressed_size) != zip_info.uncompressed_size)
+        {
+            JUSTLOG("add_custom_json_with_data unzReadCurrentFile(zip, big_scratch, zip_info.uncompressed_size) != zip_info.uncompressed_size");
+            WARNLOG("Unable to read %s/%s", path, name);
+            goto end;
+        }
+        big_scratch[zip_info.uncompressed_size] = 0;
+
+        if (UNZ_OK != unzCloseCurrentFile(zip))
+        {
+            JUSTLOG("add_custom_json_with_data UNZ_OK != unzCloseCurrentFile(zip)");
+            goto end;
+        }
+
+        int ret = json_dom_parse((char *) big_scratch, zip_info.uncompressed_size, NULL, 0, &root, &json_input_pos);
+        if (ret)
+        {
+            JUSTLOG("add_custom_json_with_data ret");
+            WARNLOG("Incorrect %s/%s line:%d col:%d", path, name, json_input_pos.line_number,
+                    json_input_pos.column_number);
+            goto end;
+        }
+
+        if (VALUE_ARRAY != value_type(&root))
+        {
+            WARNLOG("%s/%s should be array of dictionaries", path, name);
+            goto end;
+        }
+        TbBool ret_ok = process(path, zip, &root, data);
+        JUSTLOG("add_custom_json_with_data ret_ok - %i",ret_ok);    
+        value_fini(&root);
+
+        fastUnzClearCache();
+        unzClose(zip);
+
+        return ret_ok;
+    end:
+        fastUnzClearCache();
+        unzClose(zip);
+        return 0;
+}
+
 static TbBool
 add_custom_json(const char *path, const char *name, TbBool (*process)(const char *path, unzFile zip, VALUE *root))
 {
@@ -1350,7 +1617,7 @@ add_custom_json(const char *path, const char *name, TbBool (*process)(const char
     {
         goto end;
     }
-
+    
     if (UNZ_OK != fastUnzLocateFile(zip, name, 0))
     {
         goto end;
@@ -1548,7 +1815,6 @@ static unsigned char* decode_png_to_indexed_internal(unzFile zip, const char *fi
 
 
     // Convert RGBA to palette indices using rgb_to_pal_table
-    int transparent_count = 0, opaque_count = 0;
     for (size_t i = 0; i < indexed_size; i++)
     {
         unsigned char red = rgba_buffer[i * 4 + 0];
@@ -1562,17 +1828,14 @@ static unsigned char* decode_png_to_indexed_internal(unzFile zip, const char *fi
             if (alpha < 128) {
                 // Transparent pixel - use palette index 255 as transparency marker
                 indexed_data[i] = 255;
-                transparent_count++;
             } else if (rgb_to_pal_table != NULL) {
                 // Use lookup table for color conversion
                 indexed_data[i] = rgb_to_pal_table[
                     ((red >> 2) << 12) | ((green >> 2) << 6) | (blue >> 2)
                 ];
-                opaque_count++;
             } else {
                 // Fallback: simple grayscale conversion
                 indexed_data[i] = (red + green + blue) / 3;
-                opaque_count++;
             }
         }
         else
@@ -1841,6 +2104,10 @@ static int process_icon_from_list(const char *path, unzFile zip, int idx, VALUE 
     if (spr)
     {
         spr->num = first_icon;
+        int frame_idx = first_icon - GUI_PANEL_SPRITES_COUNT;
+        if (frame_idx >= 0 && frame_idx < GUI_PANEL_SPRITES_NEW) {
+            added_icon_frame_count[frame_idx] = icons_count;
+        }
         JUSTLOG("Overriding icon '%s/%s'", path,name);
     }
     else
@@ -1850,12 +2117,438 @@ static int process_icon_from_list(const char *path, unzFile zip, int idx, VALUE 
             ERRORLOG("Too many custom icons");
             return 0;
         }
-        spr = &added_icons[num_added_icons++];
+        spr = &added_icons[num_added_icons];
         spr->name = strdup(name);
         spr->num = first_icon;
+        int frame_idx = first_icon - GUI_PANEL_SPRITES_COUNT;
+        if (frame_idx >= 0 && frame_idx < GUI_PANEL_SPRITES_NEW) {
+            added_icon_frame_count[frame_idx] = icons_count;
+        }
+        num_added_icons++;
     }
 
     return 1;
+}
+
+static int process_sheet_from_list(const char *path, unzFile zip, int idx, VALUE *root, struct TbSpriteSheet *sheet, const uint8_t *conversion_table)
+{
+    
+    JUSTLOG("inside process_sheet_from_list");
+    const char *file_key = "file";
+    VALUE *file_value = value_dict_get(root, file_key);
+
+    if (file_value == NULL)
+    {
+        WARNLOG("Invalid sprite %s/icons.json[%d]: no \"%s\" key",
+                path, idx, file_key);
+        return 0;
+    }
+
+    if (value_type(file_value) == VALUE_STRING)
+    {
+        char *tmp = strdup(value_string(file_value));
+        value_init_array(file_value);
+        value_init_string(value_array_append(file_value), tmp);
+        free(tmp);
+    }
+    else if (value_type(file_value) != VALUE_ARRAY)
+    {
+        WARNLOG("Invalid sprite %s/icons.json[%d]: invalid value for %s",
+                path, idx, file_key);
+        return 0;
+    }
+
+    int files_count = value_array_size(file_value);
+
+    JUSTLOG("process_sheet_from_list files_count - %i",files_count);
+    for (int i = 0; i < files_count; i++)
+    {
+        const char *file =
+            value_string(value_array_get(file_value, i));
+
+        if (fastUnzLocateFile(zip, file, 0))
+        {
+            WARNLOG("Png '%s' not found in '%s'", file, path);
+            return 0;
+        }
+
+        if (UNZ_OK != unzOpenCurrentFile(zip))
+            return 0;
+
+        if (!read_png_to_sheet(zip, path, file, sheet, conversion_table))
+        {            
+            JUSTLOG("read_png_to_sheet failed");
+            unzCloseCurrentFile(zip);
+            return 0;
+        }
+
+        if (UNZ_OK != unzCloseCurrentFile(zip))
+            return 0;
+    }
+
+    return 1;
+}
+
+static int process_ensign_from_list(const char *path, unzFile zip, int idx, VALUE *root)
+{
+    VALUE *val = value_dict_get(root, "name");
+
+    if (val == NULL)
+    {
+        WARNLOG("Invalid ensign %s/ensigns.json[%d]: no \"name\" key", path, idx);
+        return 0;
+    }
+
+    const char *name = value_string(val);
+
+    VALUE *file_value = value_dict_get(root, "file");
+
+    if (file_value == NULL)
+    {
+        WARNLOG("Invalid ensign %s/ensigns.json[%d]: no \"file\" key", path, idx);
+        return 0;
+    }
+
+    if (value_type(file_value) == VALUE_STRING)
+    {
+        char *tmp = strdup(value_string(file_value));
+
+        if (tmp == NULL)
+        {
+            ERRORLOG("Unable to allocate filename for custom ensign '%s'", name);
+            return 0;
+        }
+
+        value_init_array(file_value);
+        value_init_string(value_array_append(file_value), tmp);
+        free(tmp);
+    }
+    else if (value_type(file_value) != VALUE_ARRAY)
+    {
+        WARNLOG("Invalid ensign %s/ensigns.json[%d]: invalid \"file\" value", path, idx);
+        return 0;
+    }
+
+    int file_count = value_array_size(file_value);
+
+    if (file_count <= 0)
+    {
+        WARNLOG("Invalid ensign %s/ensigns.json[%d]: no files", path, idx);
+        return 0;
+    }
+
+    /*
+     * Locate an existing named ensign without assuming that the
+     * NamedCommand array is currently sorted. It is sorted after the
+     * complete JSON file has been processed.
+     */
+    int ensign_id = -1;
+
+    for (int i = 0; i < num_added_ensigns; i++)
+    {
+        if (strcasecmp(added_ensigns[i].name, name) == 0)
+        {
+            ensign_id = added_ensigns[i].num;
+            break;
+        }
+    }
+
+    if (ensign_id < 0)
+    {
+        if (num_added_ensigns >= MAX_CUSTOM_ENSIGNS)
+        {
+            ERRORLOG("Too many custom ensigns (max %d)", MAX_CUSTOM_ENSIGNS);
+            return 0;
+        }
+
+        ensign_id = num_added_ensigns;
+
+        added_ensigns[ensign_id].name = strdup(name);
+
+        added_ensigns[ensign_id].num = ensign_id;
+
+        if (added_ensigns[ensign_id].name == NULL)
+        {
+            ERRORLOG("Unable to allocate custom ensign name '%s'", name);
+            return 0;
+        }
+
+        num_added_ensigns++;
+    }
+
+    /*
+     * Allocate the replacement definition before destroying the
+     * previous one. This preserves the old definition if allocation
+     * fails.
+     */
+    char *zip_path = strdup(path);
+    char **files = calloc((size_t)file_count, sizeof(char *));
+
+    if (zip_path == NULL || files == NULL)
+    {
+        free(zip_path);
+        free(files);
+
+        ERRORLOG("Unable to allocate data for custom ensign '%s'", name);
+        return 0;
+    }
+
+    for (int i = 0; i < file_count; i++)
+    {
+        const char *file = value_string(value_array_get(file_value, i));
+
+        files[i] = strdup(file);
+
+        if (files[i] == NULL)
+        {
+            for (int j = 0; j < i; j++)
+            {
+                free(files[j]);
+            }
+
+            free(files);
+            free(zip_path);
+
+            ERRORLOG("Unable to allocate filename for custom ensign '%s'", name);
+            return 0;
+        }
+    }
+
+    struct CustomEnsignData *data = &custom_ensign_data[ensign_id];
+
+    free(data->zip_path);
+
+    for (int i = 0; i < data->file_count; i++)
+    {
+        free(data->files[i]);
+    }
+
+    free(data->files);
+
+    data->zip_path = zip_path;
+    data->files = files;
+    data->file_count = file_count;
+    data->sheet_index = -1;
+
+    /*
+     * Check the files while the ZIP used by add_custom_json() is
+     * already open. We deliberately do not decode them here because
+     * the campaign palette is not necessarily available yet.
+     */
+    for (int i = 0; i < file_count; i++)
+    {
+        if (fastUnzLocateFile(zip, files[i], 0))
+        {
+            WARNLOG("Png '%s' not found in '%s'", files[i], path);
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static TbBool process_ensign(const char *path, unzFile zip, VALUE *root)
+{
+    TbBool ret_ok = true;
+
+    for (int i = 0; i < value_array_size(root); i++)
+    {
+        VALUE *val =value_array_get(root, i);
+
+        if (!process_ensign_from_list(path, zip, i, val))
+        {
+            ret_ok = false;
+        }
+    }
+
+    /*
+     * added_ensigns is the NamedCommand lookup table. Its .num values
+     * remain stable definition IDs even after sorting.
+     */
+    qsort(added_ensigns, num_added_ensigns, sizeof(added_ensigns[0]), &cmp_named_command);
+
+    return ret_ok;
+}
+
+static TbBool load_custom_ensign_data(struct TbSpriteSheet *sheet, struct CustomEnsignData *data, const uint8_t *conversion_table)
+{
+    if (sheet == NULL ||
+        data == NULL ||
+        data->zip_path == NULL ||
+        data->files == NULL ||
+        data->file_count <= 0)
+    {
+        return false;
+    }
+
+    unzFile zip = unzOpen(data->zip_path);
+
+    if (zip == NULL)
+    {
+        ERRORLOG("Unable to open custom ensign ZIP '%s'",data->zip_path);
+        return false;
+    }
+
+    if (UNZ_OK != fastUnzConstructCache(zip))
+    {
+        unzClose(zip);
+        return false;
+    }
+
+    data->sheet_index = num_sprites(sheet);
+
+    for (int i = 0; i < data->file_count; i++)
+    {
+        const char *file = data->files[i];
+
+        if (fastUnzLocateFile(zip, file, 0))
+        {
+            WARNLOG("Png '%s' not found in '%s'", file, data->zip_path);
+
+            fastUnzClearCache();
+            unzClose(zip);
+            return false;
+        }
+
+        if (UNZ_OK !=
+            unzOpenCurrentFile(zip))
+        {
+            fastUnzClearCache();
+            unzClose(zip);
+            return false;
+        }
+
+        if (!read_png_to_sheet(zip, data->zip_path, file, sheet, conversion_table))
+        {
+            unzCloseCurrentFile(zip);
+            fastUnzClearCache();
+            unzClose(zip);
+            return false;
+        }
+
+        if (UNZ_OK !=
+            unzCloseCurrentFile(zip))
+        {
+            fastUnzClearCache();
+            unzClose(zip);
+            return false;
+        }
+    }
+
+    fastUnzClearCache();
+    unzClose(zip);
+
+    return true;
+}
+
+struct TbSpriteSheet *load_custom_ensigns_into_sheet(struct TbSpriteSheet *sheet, const unsigned char *palette)
+{
+    if (palette == NULL)
+    {
+        return NULL;
+    }
+
+    if (sheet == NULL)
+    {
+        return NULL;
+    }
+
+    const uint8_t *conversion_table =
+        create_rgb_to_pal_table(palette);
+
+    if (conversion_table == NULL)
+    {
+        ERRORLOG("Unable to load custom ensign , failed to process palette");
+        return sheet;
+    }
+
+    for (int i = 0; i < num_added_ensigns; i++)
+    {
+        int ensign_id = added_ensigns[i].num;
+
+        if (ensign_id < 0 || ensign_id >= MAX_CUSTOM_ENSIGNS)
+        {
+            continue;
+        }
+
+        if (!load_custom_ensign_data(sheet, &custom_ensign_data[ensign_id], conversion_table))
+        {
+            ERRORLOG("Unable to load custom ensign '%s'", added_ensigns[i].name);
+
+            free((void *)conversion_table);
+            
+            ERRORLOG("Unable to load custom ensign , failed to process palette");
+            return NULL;
+        }
+    }
+
+    free((void *)conversion_table);
+
+    return sheet;
+}
+
+short get_ensign_id(const char *name)
+{
+    if (name == NULL || name[0] == '\0')    
+        return -1;
+    
+    char *end;
+    long value = strtol(name, &end, 10);
+
+    if (end != name && *end == '\0')
+    {
+        if (value >= 0 && value < MAX_CUSTOM_ENSIGNS)
+        {
+            return (short)value;
+        }
+
+        return -1;
+    }
+
+    struct NamedCommand key = {
+        name,
+        0
+    };
+
+    struct NamedCommand *val =
+        bsearch(
+            &key,
+            added_ensigns,
+            num_added_ensigns,
+            sizeof(added_ensigns[0]),
+            &cmp_named_command);
+
+    if (val != NULL)
+    {
+        return (short)val->num;
+    }
+
+    return -1;
+}
+
+const struct TbSprite *get_custom_ensign_sprite(
+    struct TbSpriteSheet *sheet,
+    short ensign_id,
+    int frame)
+{
+    if (ensign_id < 0 || ensign_id >= num_added_ensigns)
+        return &bad_icon;
+
+    struct CustomEnsignData *data = &custom_ensign_data[ensign_id];
+
+    if (frame < 0 || frame >= data->file_count)
+        return &bad_icon;
+
+    return get_sprite(sheet, data->sheet_index + frame);
+}
+
+int get_custom_icon_frame_count(short icon_idx)
+{
+    int frame_idx = icon_idx - GUI_PANEL_SPRITES_COUNT;
+    if (frame_idx >= 0 && frame_idx < GUI_PANEL_SPRITES_NEW) {
+        return added_icon_frame_count[frame_idx];
+    }
+    return 0;
 }
 
 static TbBool process_lens_overlay(const char *path, unzFile zip, VALUE *root)
@@ -2062,6 +2755,29 @@ static TbBool process_sprite(const char *path, unzFile zip, VALUE *root)
     return ret_ok;
 }
 
+static TbBool process_sheet(const char *path, unzFile zip, VALUE *root, void *data)
+{
+
+    JUSTLOG("inside process_sheet");
+    struct SheetLoadContext *context = data;
+    struct TbSpriteSheet* sheet = context->sheet;
+    TbBool ret_ok = true;
+
+    for (int i = 0; i < value_array_size(root); i++)
+    {
+        VALUE *val = value_array_get(root, i);
+
+        if (!process_sheet_from_list(path, zip, i, val, sheet, context->conversion_table))
+        {            
+            JUSTLOG("process_sheet_from_list failed");
+            ret_ok = false;
+            continue;
+        }
+    }
+
+    return ret_ok;
+}
+
 static TbBool add_custom_sprite(const char *path)
 {
     return add_custom_json(path, "sprites.json", &process_sprite);
@@ -2102,11 +2818,10 @@ short get_anim_id(const char *name, struct ObjectConfigStats *objst)
     if (0 == strcmp(name, "0"))
         return 0;
 
-    char *P = strrchr(name, ':');
-    if (P != NULL)
+    if (strrchr(name, ':') != NULL)
     {
         char *name2 = strdup(name);
-        P = strchr(name2, ':');
+        char *P = strchr(name2, ':');
         *P = 0; // removing :
         P++;
         key.name = name2;

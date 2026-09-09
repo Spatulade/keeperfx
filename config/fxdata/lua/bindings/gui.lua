@@ -12,6 +12,18 @@ function DisplayObjective(msg_id,zoom_location) end
 ---@param zoom_location? location
 function DisplayInformation(msg_id,zoom_location) end
 
+---Displays one of the text messages stored in gtext_***.dat in an Objective Box.
+---This file comes in various language version, so messages from it are always in the language configured in the settings.
+---@param msg_id integer
+---@param stl_x integer zoom location x in subtiles
+---@param stl_y integer zoom location y in subtiles
+function DisplayObjectiveWithPos(msg_id,stl_x,stl_y) end
+
+---@param msg_id integer
+---@param stl_x integer zoom location x in subtiles
+---@param stl_y integer zoom location y in subtiles
+function DisplayInformationWithPos(msg_id,stl_x,stl_y) end
+
 ---Works like Display_objective, but instead of using a string from translations, allows to type it directly.
 ---@param message string
 ---@param zoom_location? location
@@ -36,6 +48,60 @@ function QuickInformation(slot,message,zoom_location) end
 ---@param stl_y integer zoom location y in subtiles
 function QuickInformationWithPos(slot,message,stl_x,stl_y) end
 
+---Displays one of the text messages stored in gtext_***.dat in an Objective Box.
+---This file comes in various language version, so messages from it are always in the language configured in the settings.
+---@param msg_id integer
+---@param player Player Target player who receives the message.
+---@param zoom_location? location
+function DisplayPlayerObjective(msg_id,player,zoom_location) end
+
+---@param msg_id integer
+---@param player Player Target player who receives the message.
+---@param zoom_location? location
+function DisplayPlayerInformation(msg_id,player,zoom_location) end
+
+---Works like Display_objective, but instead of using a string from translations, allows to type it directly.
+---@param message string
+---@param player Player Target player who receives the message.
+---@param zoom_location? location
+function QuickPlayerObjective(message,player,zoom_location) end
+
+---Works like Display_objective, but instead of using a string from translations, allows to type it directly.
+---@param message string
+---@param player Player Target player who receives the message.
+---@param stl_x integer zoom location x in subtiles
+---@param stl_y integer zoom location y in subtiles
+function QuickPlayerObjectiveWithPos(message,player,stl_x,stl_y) end
+
+---Works like Display_information, but instead of using a string from translations, allows to type it directly.
+---@param slot integer Message slot selection. There are 256 quick message slots, and each message you're making should use a different one. Using one message slot twice will lead to the first message being lost.
+---@param player Player Target player who receives the message.
+---@param message string
+---@param zoom_location? location
+function QuickPlayerInformation(slot,player,message,zoom_location) end
+
+---Works like Display_information, but instead of using a string from translations, allows to type it directly.
+---@param slot integer Message slot selection. There are 256 quick message slots, and each message you're making should use a different one. Using one message slot twice will lead to the first message being lost.
+---@param player Player Target player who receives the message.
+---@param message string
+---@param stl_x integer zoom location x in subtiles
+---@param stl_y integer zoom location y in subtiles
+function QuickPlayerInformationWithPos(slot,player,message,stl_x,stl_y) end
+
+---Displays one of the text messages stored in gtext_***.dat in an Objective Box.
+---This file comes in various language version, so messages from it are always in the language configured in the settings.
+---@param msg_id integer
+---@param player Player Target player who receives the message.
+---@param stl_x integer zoom location x in subtiles
+---@param stl_y integer zoom location y in subtiles
+function DisplayPlayerObjectiveWithPos(msg_id,player,stl_x,stl_y) end
+
+---@param msg_id integer
+---@param player Player Target player who receives the message.
+---@param stl_x integer zoom location x in subtiles
+---@param stl_y integer zoom location y in subtiles
+function DisplayPlayerInformationWithPos(msg_id,player,stl_x,stl_y) end
+
 ---Plays a sound message or sound effect.
 ---@param player Player The name of the player who gets to hear the sound.
 ---@param type "SPEECH"|"SOUND" If it is a sound effect or a speech. Speeches queue, sounds play at the same time.
@@ -49,8 +115,16 @@ function PlayMessage(player,type,sound) end
 ---@param target_type? integer Can be set to 0, 1 or 2. Set to 0 it displays how much more you need to reach the target, 1 displays how many you need to lose to reach the target, 2 is like 0 but shows negative values too.
 function DisplayVariable(player, variable, target, target_type) end
 
+---Displays a script variable on screen with label or icon.
+---@param player Player The player’s name, e.g. PLAYER1.
+---@param variable string  The variable that is to be exported, e.g. SKELETONS_RAISED. See variable of the og dk script for more info
+---@param icon icon? string|Player|Creature The name of the player, creature, creature spell, Keeper spell, creature instance, room, or query icon that is shown as the sender of the message.  Optional, leaving it out will use the default associated icon if type is icon.
+function DisplayVariableWithLabel(player, variable, icon) end
+
 ---Hides the variable that has been made visible with Display_variable
-function HideVariable() end
+---@param player Player The player’s name, e.g. PLAYER1.
+---@param variable? string optional variable to hide, if not populated will hide all
+function HideVariable(variable) end
 
 --- Displays on screen how long a specific script timer reaches the target turn.
 --- @param player Player The player’s name, e.g. PLAYER1.
@@ -61,12 +135,12 @@ function DisplayCountdown(player,timer,target,clocktime) end
 
 ---Displays one of the text messages from language-specific strings banks as a chat message, with a specific unit or player shown as the sender. It disappears automatically after some time.
 ---@param msg_id integer The number of the message, assigned to it in .po or .pot translation file.
----@param icon string|Player|Creature The name of the player, creature, creature spell, Keeper spell, creature instance, room, or query icon that is shown as the sender of the message. Accepts None for no icon.
+---@param icon? string|Player|Creature The name of the player, creature, creature spell, Keeper spell, creature instance, room, or query icon that is shown as the sender of the message.  Optional, leaving it out means no icon.
 function DisplayMessage(msg_id,icon) end
 
 ---Works like Display_message, but instead of using a string from translations, allows to type it directly.
 ---@param msg string The chat message as a string
----@param icon string|Player|Creature The name of the player, creature, creature spell, Keeper spell, creature instance, room, or query icon that is shown as the sender of the message. Accepts None for no icon.
+---@param icon? string|Player|Creature The name of the player, creature, creature spell, Keeper spell, creature instance, room, or query icon that is shown as the sender of the message. Optional, leaving it out means no icon.
 function QuickMessage(msg,icon) end
 
 ---Clears QuickMessages, DisplayMessages and chat messages from the screen.

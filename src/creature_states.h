@@ -118,7 +118,7 @@ enum CreatureStates {
     CrSt_ImpBirth,
     CrSt_AtTemple,
     CrSt_PrayingInTemple,
-    CrSt_Null84,
+    CrSt_CreatureOutOfPlay,
     CrSt_CreatureFollowLeader,
     CrSt_CreatureDoorCombat,
     CrSt_CreatureCombatFlee,
@@ -217,6 +217,7 @@ enum CreatureStateTypes {
     CrStTyp_FightObj,
     CrStTyp_Called2Arms,
     CrStTyp_Follow,
+    CrStTyp_DeepWork,
     CrStTyp_ListEnd,
 };
 
@@ -362,6 +363,7 @@ TbBool creature_is_being_unconscious(const struct Thing *thing);
 TbBool creature_can_be_set_unconscious(const struct Thing *creatng, const struct Thing *killertng, CrDeathFlags flags);
 TbBool creature_is_celebrating(const struct Thing *thing);
 TbBool creature_is_being_tortured(const struct Thing *thing);
+TbBool creature_is_being_tortured_including_kinky(const struct Thing* thing);
 TbBool creature_is_being_sacrificed(const struct Thing *thing);
 TbBool creature_is_leaving_and_cannot_be_stopped(const struct Thing* thing);
 TbBool creature_is_kept_in_prison(const struct Thing *thing);

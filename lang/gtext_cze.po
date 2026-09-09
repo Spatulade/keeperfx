@@ -2889,6 +2889,7 @@ msgid "Play Intro"
 msgstr "Přehrát intro"
 
 #: guitext:350
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Multiplayer Menu"
 msgstr "Nabídka hry pro více hráčů"
@@ -3114,6 +3115,7 @@ msgid "Testers"
 msgstr "Testeři"
 
 #: guitext:395
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Game Lobbies"
 msgstr "Herní lobby"
@@ -3124,6 +3126,7 @@ msgid "Name"
 msgstr "jméno"
 
 #: guitext:397
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Game Modes"
 msgstr "Herní režimy"
@@ -3134,11 +3137,13 @@ msgid "Messages"
 msgstr "Zprávy"
 
 #: guitext:399
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Create Lobby"
 msgstr "Vytvořit lobby"
 
 #: guitext:400
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Join Lobby"
 msgstr "Připojit se do lobby"
@@ -3149,6 +3154,7 @@ msgid "Start Game"
 msgstr "Spustit hru"
 
 #: guitext:402
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Online Lobbies"
 msgstr "Online lobby"
@@ -5818,16 +5824,19 @@ msgid "4 Players"
 msgstr "4 hráči"
 
 #: guitext:874
+#, fuzzy
 msgctxt "Menu interface, Network service item"
 msgid "Online"
 msgstr "Online"
 
 #: guitext:875
+#, fuzzy
 msgctxt "Menu interface, Network service item"
 msgid "LAN"
 msgstr "LAN"
 
 #: guitext:876
+#, fuzzy
 msgctxt "Menu interface, Network service item"
 msgid "Skirmish"
 msgstr "Potyčka"
@@ -6599,7 +6608,19 @@ msgctxt "Menu interface item"
 msgid "Lost Levels"
 msgstr "Ztracené úrovně"
 
-#: guitext:976 guitext:977 guitext:978 guitext:979 guitext:980
+#: guitext:976
+#, fuzzy
+msgctxt "Menu interface item"
+msgid "Modern Levels"
+msgstr "Moderní úrovně"
+
+#: guitext:977
+#, fuzzy
+msgctxt "Menu interface item"
+msgid "Bullfrog Levels"
+msgstr "Úrovně Bullfrog"
+
+#: guitext:978 guitext:979 guitext:980
 msgctxt "Unused"
 msgid "Moo3"
 msgstr "Moo3"
@@ -6827,7 +6848,7 @@ msgstr ""
 
 #: guitext:1024
 msgctxt "Menu interface item"
-msgid "Good Campaign"
+msgid "The Good Guys"
 msgstr ""
 
 #: guitext:1025
@@ -7128,16 +7149,19 @@ msgid "Keeper"
 msgstr "Strážce"
 
 #: guitext:1083
+#, fuzzy
 msgctxt "Game controls"
 msgid "Screen Capture"
 msgstr "Nahrávání obrazovky"
 
 #: guitext:1084
+#, fuzzy
 msgctxt "Game controls"
 msgid "Screenshot"
 msgstr "Snímek obrazovky"
 
 #: guitext:1085
+#, fuzzy
 msgctxt "Game controls"
 msgid "Frame Skip Increase"
 msgstr "Zvýšit přeskakování snímků"
@@ -7251,3 +7275,71 @@ msgstr "Teleport k výzvě ke zbraním"
 msgctxt "Game controls"
 msgid "Teleport Default"
 msgstr "Teleport výchozí"
+
+#: guitext:1110
+msgctxt "Menu interface item"
+msgid "Multiplayer Map Packs"
+msgstr ""
+
+#: guitext:1111
+msgctxt "Menu interface item"
+msgid "Return to Lobby"
+msgstr ""
+
+#: guitext:1112
+msgctxt "In-game message"
+msgid "You have been defeated. As host, keep the game running until the match concludes."
+msgstr "Byl jsi poražen. Jako hostitel ponech hru spuštěnou, dokud zápas neskončí."
+
+#: guitext:1113
+msgctxt "Network game message"
+msgid "Verify /fxdata/ is the same across all PCs."
+msgstr "Ověřte, že /fxdata/ je na všech počítačích stejné."
+
+#: guitext:1114
+msgctxt "Network game message"
+msgid "WARNING: Custom sprite mismatch with %s!"
+msgstr "VAROVÁNÍ: vlastní sprity se neshodují s %s!"
+
+#: guitext:1115
+msgctxt "Network game message"
+msgid "I am the computer now!"
+msgstr "Teď hraje počítač!"
+
+#: guitext:1116
+msgctxt "Network game message"
+msgid "%s has left the game."
+msgstr "%s opustil hru."
+
+#: guitext:1117
+msgctxt "Network game message"
+msgid "%s has disconnected."
+msgstr "%s se odpojil."
+
+#: guitext:1118
+msgctxt "Unused"
+msgid "unused"
+msgstr "unused"
+
+#: guitext:1119
+msgctxt "Network game message"
+msgid "Network connection to host lost"
+msgstr "Síťové spojení s hostitelem bylo ztraceno"
+
+#: guitext:1120
+#, fuzzy
+msgctxt "In-game message"
+msgid "/fxdata/%.39s was not loaded."
+msgstr "/fxdata/%.39s nebyl načten."
+
+#: guitext:1121
+#, fuzzy
+msgctxt "In-game message"
+msgid "Please install it as a mod inside the /mods/ folder."
+msgstr "Nainstalujte jej jako mod do složky /mods/."
+
+#: guitext:1122
+#, fuzzy
+msgctxt "Network game message"
+msgid "Lost connection to server"
+msgstr "Připojení k serveru bylo ztraceno."

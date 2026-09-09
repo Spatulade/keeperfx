@@ -31,6 +31,7 @@ extern "C" {
 #endif
 
 #define COMMANDDESC_ARGS_COUNT    8
+#define SCRIPT_VAR_ENUM_COUNT    92
 
 enum TbScriptCommands {
     Cmd_NONE                               =  0,
@@ -197,6 +198,18 @@ enum TbScriptCommands {
     Cmd_SHOW_BONUS_LEVEL                   = 185,
     Cmd_HIDE_BONUS_LEVEL                   = 186,
     Cmd_HIDE_HERO_GATE                     = 187,
+    Cmd_DISPLAY_PLAYER_OBJECTIVE           = 188,
+    Cmd_DISPLAY_PLAYER_INFORMATION         = 189,
+    Cmd_DISPLAY_PLAYER_OBJECTIVE_WITH_POS  = 190,
+    Cmd_DISPLAY_PLAYER_INFORMATION_WITH_POS  = 191,
+    Cmd_QUICK_PLAYER_OBJECTIVE             = 192,
+    Cmd_QUICK_PLAYER_INFORMATION           = 193,
+    Cmd_QUICK_PLAYER_OBJECTIVE_WITH_POS    = 194,
+    Cmd_QUICK_PLAYER_INFORMATION_WITH_POS  = 195,
+    Cmd_COPY_CREATURE_TYPE                 = 196,
+    Cmd_TRIGGER_ACTION_POINT               = 197,
+    Cmd_SET_LEVEL_ENSIGN                   = 198,
+    Cmd_DISPLAY_VARIABLE_WITH_LABEL        = 199,
 };
 
 struct ScriptLine {
@@ -216,7 +229,6 @@ struct CommandDesc { // sizeof = 14 // originally was 13
 enum ScriptVariables {
   SVar_MONEY                           =  1,
   SVar_GAME_TURN                       =  5,
-  SVar_BREAK_IN                        =  6,
   SVar_CREATURE_NUM                    =  7,
   SVar_TOTAL_DIGGERS                   =  8,
   SVar_TOTAL_CREATURES                 =  9,
@@ -304,8 +316,6 @@ enum ScriptVariables {
   SVar_CONTROLLED_THING                = 91,
  };
 
-
-
 extern const struct NamedCommand player_desc[];
 extern const struct NamedCommand controls_variable_desc[];
 extern const struct NamedCommand timer_desc[];
@@ -331,6 +341,9 @@ ThingModel parse_creature_name(const char *creature_name);
 struct ScriptValue *allocate_script_value(void);
 struct Thing *script_process_new_object(ThingModel tngmodel, MapSubtlCoord stl_x, MapSubtlCoord stl_y, long arg, PlayerNumber plyr_idx, short move_angle);
 struct Thing* script_process_new_effectgen(ThingModel crmodel, TbMapLocation location, long range);
+struct Thing* script_process_new_corpse(ThingModel tngmodel, MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, CrtrExpLevel exp_level, TbBool dying);
+TbBool script_new_creature_type(const char* name);
+TbBool script_copy_creature_type(ThingModel source_id,const char* name);
 void command_init_value(struct ScriptValue* value, unsigned long var_index, unsigned long plr_range_id);
 void command_add_value(unsigned long var_index, unsigned long plr_range_id, long param1, long param2, long param3);
 void set_variable(int player_idx, long var_type, long var_idx, long new_val);
@@ -341,7 +354,9 @@ long parse_criteria(const char *criteria);
 #define get_players_range_single(plr_range_id) get_players_range_single_f(plr_range_id, __func__, text_line_number)
 long get_players_range_single_f(long plr_range_id, const char *func_name, long ln_num);
 TbBool parse_get_varib(const char *varib_name, int32_t *varib_id, int32_t *varib_type, long level_file_version);
-void get_chat_icon_from_value(const char* txt, char* id, char* type);
+void get_chat_icon_from_value(const char* txt, short* id, char* type);
+short get_chat_icon_sprite_idx_from_id(short id, char type);
+short get_chat_icon_sprite_idx(const char* txt);
 #define get_player_id(plrname, plr_range_id) get_player_id_f(plrname, plr_range_id, __func__, text_line_number)
 TbBool get_player_id_f(const char *plrname, int32_t *plr_range_id, const char *func_name, long ln_num);
 PlayerNumber get_objective_id_with_potential_target(const char* locname, PlayerNumber* target);

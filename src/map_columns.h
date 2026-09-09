@@ -29,6 +29,7 @@ extern "C" {
 #define COLUMNS_COUNT          16384
 #define COLUMN_STACK_HEIGHT        8
 #define COLUMN_WALL_HEIGHT         5
+#define ABYSS_DEPTH                24
 /******************************************************************************/
 #pragma pack(1)
 
@@ -82,20 +83,24 @@ TbBool map_pos_solid_at_ceiling(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 
 long get_top_cube_at_pos(SubtlCodedCoords mpos);
 long get_top_cube_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, int32_t *cube_pos);
-long get_map_floor_height(const struct Map *mapblk);
-long get_floor_height(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
-long get_floor_height_at(const struct Coord3d *pos);
-long get_map_ceiling_height(const struct Map *mapblk);
-long get_ceiling_height_at(const struct Coord3d *pos);
-long get_ceiling_height_at_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
+MapCoord get_map_floor_height(const struct Map *mapblk);
+MapCoord get_floor_height(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
+MapCoord get_floor_height_at(const struct Coord3d *pos);
+MapCoord get_map_ceiling_height(const struct Map *mapblk);
+MapCoord get_ceiling_height_at(const struct Coord3d *pos);
+MapCoord get_ceiling_height_at_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 
 TbBool cube_is_lava(long cube_id);
 TbBool cube_is_water(long cube_id);
+TbBool cube_is_abyss(long cube_id);
 TbBool cube_is_sacrificial(long cube_id);
 TbBool cube_is_unclaimed_path(long cube_id);
 
+TbBool subtile_is_unsafe(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
+
 TbBool subtile_has_lava_on_top(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 TbBool subtile_has_water_on_top(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
+TbBool subtile_has_abyss_on_top(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 TbBool subtile_has_sacrificial_on_top(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 TbBool subtile_is_liquid(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 TbBool subtile_is_unclaimed_path(MapSubtlCoord stl_x, MapSubtlCoord stl_y);

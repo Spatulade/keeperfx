@@ -51,7 +51,6 @@
 #include "map_events.h"
 #include "map_blocks.h"
 #include "map_utils.h"
-#include "ariadne_wallhug.h"
 #include "power_hand.h"
 #include "gui_topmsg.h"
 #include "gui_soundmsgs.h"
@@ -61,6 +60,7 @@
 #include "thing_traps.h"
 #include "magic_powers.h"
 #include "sounds.h"
+#include "config_sounds.h"
 #include "game_legacy.h"
 #include "sprites.h"
 #include "lua_cfg_funcs.h"
@@ -544,7 +544,8 @@ const CreatureStateCheck move_check_func_list[] = {
  * - 2: Fighting.
  */
 long const state_type_to_gui_state[STATE_TYPES_COUNT] = {
-    0, 1, 0, 0, 0, 2, 0, 0, 1, 0, 0, 2, 2, 1, 1,
+    CrGUIJob_Wandering, CrGUIJob_Working, CrGUIJob_Wandering, CrGUIJob_Wandering, CrGUIJob_Wandering, CrGUIJob_Fighting, CrGUIJob_Wandering, CrGUIJob_Wandering,
+    CrGUIJob_Working, CrGUIJob_Wandering, CrGUIJob_Wandering, CrGUIJob_Fighting, CrGUIJob_Fighting, CrGUIJob_Working, CrGUIJob_Working, CrGUIJob_Working
 };
 
 /******************************************************************************/
@@ -748,6 +749,14 @@ TbBool creature_is_being_tortured(const struct Thing *thing)
 {
     CrtrStateId i = get_creature_state_besides_interruptions(thing);
     if ((i == CrSt_Torturing) || (i == CrSt_AtTortureRoom))
+        return true;
+    return false;
+}
+
+TbBool creature_is_being_tortured_including_kinky(const struct Thing* thing)
+{
+    CrtrStateId i = get_creature_state_besides_interruptions(thing);
+    if ((i == CrSt_Torturing) || (i == CrSt_AtTortureRoom) || (i == CrSt_AtKinkyTortureRoom) || (i == CrSt_KinkyTorturing))
         return true;
     return false;
 }
@@ -1082,10 +1091,10 @@ TbBool attempt_to_destroy_enemy_room(struct Thing *thing, MapSubtlCoord stl_x, M
         return false;
     if (!find_first_valid_position_for_thing_anywhere_in_room(thing, room, &pos))
         return false;
-    if (!creature_can_navigate_to_with_storage(thing, &pos, NavRtF_NoOwner))
+    if (!creature_can_navigate_to_with_storage(thing, &pos, NavRtF_Default))
         return false;
 
-    if (!setup_head_for_room(thing, room, NavRtF_NoOwner))
+    if (!setup_head_for_room(thing, room, NavRtF_Default))
     {
         ERRORLOG("The %s cannot destroy %s because it can't reach it",thing_model_name(thing),room_code_name(room->kind));
         return false;
@@ -2810,7 +2819,7 @@ short creature_present_to_dungeon_heart(struct Thing *creatng)
 {
     TRACE_THING(creatng);
     create_effect(&creatng->mappos, imp_spangle_effects[get_player_color_idx(creatng->owner)], creatng->owner);
-    thing_play_sample(creatng, 76, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
+    thing_play_sample(creatng, snd_spell_stars, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
     if ( !external_set_thing_state(creatng, CrSt_CreatureDoingNothing) )
       set_start_state(creatng);
     return 1;
@@ -2977,7 +2986,7 @@ TbBool init_creature_state(struct Thing *creatng)
     // Check job which we can do after dropping at these coordinates
     if (is_neutral_thing(creatng))
     {
-        if ((game.conf.rules[creatng->owner].game.classic_bugs_flags & ClscBug_PassiveNeutrals))
+        if ((game.conf.rules[creatng->owner].gameplay.classic_bugs_flags & ClscBug_PassiveNeutrals))
         {
             SYNCDBG(3,"Trying to assign initial job at (%ld,%ld) for neutral %s index %d owner %d",stl_x,stl_y,thing_model_name(creatng),creatng->index,creatng->owner);
             return false;
@@ -3158,11 +3167,11 @@ short creature_take_salary(struct Thing *creatng)
     set_start_state(creatng);
     struct CreatureModelConfig* crconf = creature_stats_get_from_thing(creatng);
     struct Thing* efftng = create_price_effect(&creatng->mappos, creatng->owner, received);
-    if (!(game.conf.rules[creatng->owner].game.classic_bugs_flags & ClscBug_FullyHappyWithGold))
+    if (!(game.conf.rules[creatng->owner].gameplay.classic_bugs_flags & ClscBug_FullyHappyWithGold))
     {
         anger_apply_anger_to_creature_all_types(creatng, crconf->annoy_got_wage);
     }
-    thing_play_sample(efftng, 32, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
+    thing_play_sample(efftng, snd_gold_pickup, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
     dungeon->lvstats.salary_cost += salary;
     return 1;
 }
@@ -3195,12 +3204,13 @@ void make_creature_unconscious(struct Thing *creatng)
     clear_creature_instance(creatng);
     set_creature_size_stuff(creatng);
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
-    if (game.conf.rules[creatng->owner].game.classic_bugs_flags & ClscBug_ResurrectRemoved)
+    if (game.conf.rules[creatng->owner].gameplay.classic_bugs_flags & ClscBug_ResurrectRemoved)
     {
         // If the classic bug is enabled, fainted units are also added to resurrect creature.
         update_dead_creatures_list_for_owner(creatng);
     }
     creatng->active_state = CrSt_CreatureUnconscious;
+    clear_flag(creatng->movement_flags, TMvF_Flying);
     cctrl->creature_control_flags |= CCFlg_PreventDamage;
     cctrl->creature_control_flags |= CCFlg_NoCompControl;
     cctrl->conscious_back_turns = game.conf.rules[creatng->owner].creature.game_turns_unconscious;
@@ -3214,6 +3224,7 @@ void make_creature_conscious_without_changing_state(struct Thing *creatng)
     cctrl->creature_control_flags &= ~CCFlg_PreventDamage;
     cctrl->creature_control_flags &= ~CCFlg_NoCompControl;
     cctrl->conscious_back_turns = 0;
+    restore_creature_flight_flag(creatng);
     if ((creatng->state_flags & TF1_IsDragged1) != 0)
     {
         struct Thing* sectng = thing_get(cctrl->dragtng_idx);
@@ -3521,7 +3532,7 @@ long setup_head_for_empty_treasure_space(struct Thing *thing, struct Room *room)
     struct Thing* gldtng = find_gold_hoarde_at(slab_subtile_center(slb_x), slab_subtile_center(slb_y));
 
     // If the random slab has enough space to drop all gold, go there to drop it
-    long wealth_size_holds = game.conf.rules[room->owner].game.gold_per_hoard / get_wealth_size_types_count();
+    long wealth_size_holds = game.conf.rules[room->owner].gameplay.gold_per_hoard / get_wealth_size_types_count();
     GoldAmount max_hoard_size_in_room = wealth_size_holds * room->total_capacity / room->slabs_count;
     if ((max_hoard_size_in_room - gldtng->valuable.gold_stored) >= thing->creature.gold_carried)
     {
@@ -4621,6 +4632,7 @@ long get_thing_navigation_distance(struct Thing* creatng, struct Coord3d* pos, u
         return 0;
 
     nav_thing_can_travel_over_lava = creature_can_travel_over_lava(creatng);
+    nav_thing_is_flying = flag_is_set(creatng->movement_flags, TMvF_Flying);
     if (resetOwnerPlayerNavigating)
         owner_player_navigating = -1;
     else
@@ -4637,6 +4649,7 @@ long get_thing_navigation_distance(struct Thing* creatng, struct Coord3d* pos, u
         pos->y.val,
         -2, nav_sizexy, __func__);
     nav_thing_can_travel_over_lava = 0;
+    nav_thing_is_flying = 0;
 
     int distance = 0;
     if (!path.waypoints_num)
@@ -4679,7 +4692,8 @@ short seek_the_enemy(struct Thing *creatng)
                 if ((dist < 2304) && (get_gameturn()-cctrl->countdown < 20))
                 {
                     crsound = get_creature_sound(creatng, CrSnd_Fight);
-                    thing_play_sample(creatng, crsound->index + SOUND_RANDOM(crsound->count), NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
+                    long fight_i = SOUND_RANDOM(crsound->count);
+                    thing_play_sample(creatng, creature_sound_unified_id(crsound, fight_i), NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
                     set_creature_instance(creatng, CrInst_CELEBRATE_SHORT, 0, 0);
                     return 1;
                 }
@@ -4895,6 +4909,10 @@ TbBool cleanup_creature_state_and_interactions(struct Thing *creatng)
     {
         remove_creature_from_group(creatng);
     }
+    if (creature_is_familiar(creatng))
+    {
+        remove_creature_from_summoner(creatng);
+    }
     remove_events_thing_is_attached_to(creatng);
     // Use the correct function to clear them properly. Terminating the spells also removes the attached effects.
     if (creature_under_spell_effect(creatng, CSAfF_Armour))
@@ -4965,6 +4983,8 @@ TbBool can_change_from_state_to(const struct Thing *thing, CrtrStateId curr_stat
         return (next_stati->override_call2arms);
     case CrStTyp_Follow:
         return (next_stati->override_follow);
+    case CrStTyp_DeepWork:
+        return (next_stati->override_deep_work);
     default:
         return true;
     }
@@ -5146,7 +5166,7 @@ long process_creature_needs_a_wage(struct Thing *creatng, const struct CreatureM
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
     if ((crconf->pay == 0) || (cctrl->paydays_owed == 0)) {
-      return 0;
+        return 0;
     }
     if (creature_is_taking_salary_activity(creatng)) {
         return 1;
@@ -5154,6 +5174,17 @@ long process_creature_needs_a_wage(struct Thing *creatng, const struct CreatureM
     if (!can_change_from_state_to(creatng, creatng->active_state, CrSt_CreatureWantsSalary)) {
         return 0;
     }
+
+    // Fixed an issue where advances taken during non-salary states (e.g., sleeping) after payday would not take effect immediately.
+    if (cctrl->paydays_owed > 0 && cctrl->paydays_advanced > 0) {
+        int pay_days = min(cctrl->paydays_owed, cctrl->paydays_advanced);
+        cctrl->paydays_owed -= pay_days;
+        cctrl->paydays_advanced -= pay_days;
+    }
+    if (cctrl->paydays_owed == 0) {
+        return 0;
+    }
+
     cctrl->collided_door_subtile = 0;
     struct Room* room = find_nearest_room_of_role_for_thing_with_used_capacity(creatng, creatng->owner, RoRoF_GoldStorage, NavRtF_Default, 1);
     if (!room_is_invalid(room))
@@ -5582,8 +5613,6 @@ TbBool setup_move_off_lava(struct Thing* thing)
     return false;
 }
 
-//todo CAVE_IN_NEAR_FLEE_POSITION into config file
-#define CAVE_IN_NEAR_FLEE_POSITION 200
 TbBool setup_move_out_of_cave_in(struct Thing* thing)
 {
     MapSlabCoord bx = 0;
@@ -5609,14 +5638,17 @@ TbBool setup_move_out_of_cave_in(struct Thing* thing)
     }
     if (valid_flee_pos) // If a flee position is found, go there.
     {
-        long dist = LbDiagonalLength(abs(thing->mappos.x.val - cctrl->flee_pos.x.val), abs(thing->mappos.y.val - cctrl->flee_pos.y.val));
-        // If you're too close to the flee position, no point in going there to escape cave in damage.
-        if (dist <= CAVE_IN_NEAR_FLEE_POSITION)
+        // If you're too close to the flee position, no point in going there to escape cave in damage. Creatures will not go to flee pos when they within slab_coord(2), so we use slab_coord(3) here.
+        if (get_chessboard_distance(&thing->mappos, &cctrl->flee_pos) <= slab_coord(3))
         {
             // Heroes that are near to a hero gate, should escape through it if they can.
             if (is_hero_thing(thing))
             {
                 if (good_leave_through_exit_door(thing))
+                {
+                    return true;
+                }
+                if (good_setup_wander_to_exit(thing))
                 {
                     return true;
                 }
@@ -5638,8 +5670,9 @@ TbBool setup_move_out_of_cave_in(struct Thing* thing)
         }
         else
         {
-            if (setup_person_move_to_coord(thing, &cctrl->flee_pos, 0))
+            if (external_set_thing_state(thing, CrSt_CreatureCombatFlee))
             {
+                cctrl->flee_start_turn = get_gameturn();
                 return true;
             }
         }

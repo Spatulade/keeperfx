@@ -18,12 +18,16 @@
 /******************************************************************************/
 #include "pre_inc.h"
 #include "net_checksums.h"
+#include "bflib_dernc.h"
+#include "config.h"
 #include "game_legacy.h"
+#include "game_merge.h"
 #include "net_game.h"
 #include "packets.h"
 #include "player_data.h"
 #include "thing_data.h"
 #include "room_list.h"
+#include "slab_data.h"
 #include "creature_control.h"
 #include "thing_creature.h"
 #include "thing_list.h"
@@ -98,7 +102,6 @@ TbBigChecksum get_thing_checksum(const struct Thing* thing) {
         CHECKSUM_ADD(checksum, cctrl->digger.stack_update_turn);
         CHECKSUM_ADD(checksum, cctrl->digger.working_stl);
         CHECKSUM_ADD(checksum, cctrl->digger.task_stl);
-        CHECKSUM_ADD(checksum, cctrl->digger.task_idx);
         CHECKSUM_ADD(checksum, cctrl->digger.consecutive_reinforcements);
         CHECKSUM_ADD(checksum, cctrl->digger.last_did_job);
         CHECKSUM_ADD(checksum, cctrl->digger.task_stack_pos);
@@ -112,13 +115,14 @@ static TbBigChecksum compute_player_checksum(struct PlayerInfo *player) {
     if ((player->allocflags & PlaF_CompCtrl) != 0 || camera == NULL) {
         return 0;
     }
-    struct Coord3d* mappos = &(camera->mappos);
     TbBigChecksum checksum = 0;
     CHECKSUM_ADD(checksum, player->instance_remain_turns);
     CHECKSUM_ADD(checksum, player->instance_num);
-    CHECKSUM_ADD(checksum, mappos->x.val);
-    CHECKSUM_ADD(checksum, mappos->y.val);
-    CHECKSUM_ADD(checksum, mappos->z.val);
+    if (player->victory_state == VicS_Undecided) {
+        CHECKSUM_ADD(checksum, camera->mappos.x.val);
+        CHECKSUM_ADD(checksum, camera->mappos.y.val);
+        CHECKSUM_ADD(checksum, camera->mappos.z.val);
+    }
     return checksum;
 }
 
@@ -191,20 +195,28 @@ static struct ChecksumSnapshot* find_snapshot(GameTurn turn) {
     return NULL;
 }
 
-short checksums_different(void) {
-    int host_player_id = get_host_player_id();
-    struct Packet* host_packet = get_packet(host_player_id);
+short checksums_different(void)
+{
+    const NetUserId host_user_id = SERVER_ID;
+    struct Packet* host_packet = get_packet(host_user_id);
     TbBigChecksum host_checksum = host_packet->checksum;
     TbBool mismatch = false;
 
-    for (int i = 0; i < PLAYERS_COUNT; i++) {
-        struct PlayerInfo* player = get_player(i);
-        if (i == host_player_id || !player_exists(player) || ((player->allocflags & PlaF_CompCtrl) != 0)) {
+    for (NetUserId i = 0; i < MAX_NET_USERS; i++) {
+        if (i == host_user_id) {
             continue;
         }
-        struct Packet* packet = get_packet_direct(player->packet_num);
+        if (!network_user_active(i)) {
+            continue;
+        }
+        struct PlayerInfo* player = get_player(get_net_user_player_number(i));
+        if (!player_exists(player)) {
+            continue;
+        }
+        struct Packet* packet = get_packet(i);
         if (is_packet_empty(packet)) {
-            MULTIPLAYER_LOG("checksums_different: packet[%d] is EMPTY", i);
+            ERRORLOG("Missing checksum packet for user %d; host turn: %d", i, host_packet->turn);
+            desync_turn = host_packet->turn;
             mismatch = true;
             continue;
         }
@@ -217,15 +229,30 @@ short checksums_different(void) {
     return mismatch;
 }
 
-TbBigChecksum calculate_network_startup_map_checksum(void) {
-    TbBigChecksum checksum_mem = 0;
-    for (int i = 1; i < THINGS_COUNT; i++) {
-        struct Thing* thing = thing_get(i);
-        if (thing_exists(thing)) {
-            checksum_mem += thing->mappos.z.val + thing->mappos.y.val + thing->mappos.x.val;
-        }
+TbBigChecksum calculate_file_checksum(const char *fname)
+{
+    int32_t file_size = (int32_t)LbFileLengthRnc(fname);
+    TbBigChecksum checksum = 0;
+    CHECKSUM_ADD(checksum, file_size);
+    if (file_size <= 0) {
+        return checksum;
     }
-    return checksum_mem + game.action_random_seed;
+    unsigned char *file_buf = malloc(file_size);
+    if (file_buf != NULL && LbFileLoadAt(fname, file_buf) == file_size) {
+        CHECKSUM_ADD(checksum, rnc_crc(file_buf, file_size));
+    }
+    free(file_buf);
+    return checksum;
+}
+
+void calculate_network_startup_map_checksums(TbBigChecksum checksums[NETWORK_STARTUP_MAP_FILE_COUNT])
+{
+    LevelNumber lvnum = get_loaded_level_number();
+    short fgroup = get_level_fgroup(lvnum);
+    for (int i = 0; i < NETWORK_STARTUP_MAP_FILE_COUNT; i++) {
+        char* fname = prepare_file_fmtpath(fgroup, "map%05u.%s", lvnum, network_startup_compare_files[i]);
+        checksums[i] = calculate_file_checksum(fname);
+    }
 }
 
 void update_turn_checksums(void) {
@@ -237,7 +264,7 @@ void update_turn_checksums(void) {
     snapshot_info->thing_count = 0;
     snapshot_info->player_count = 0;
     snapshot_info->room_count = 0;
-    if ((game.system_flags & GSF_NetworkActive) != 0) {
+    if (network_is_active()) {
         for (int i = 1; i < SYNCED_THINGS_COUNT; i++) {
             struct Thing* thing = thing_get(i);
             if (!thing_exists(thing) || is_non_synchronized_thing_class(thing->class_id)) {
@@ -298,7 +325,11 @@ void update_turn_checksums(void) {
             player_snapshot->id = i;
             player_snapshot->instance_num = player->instance_num;
             player_snapshot->instance_remain_turns = player->instance_remain_turns;
-            player_snapshot->mappos = camera->mappos;
+            if (player->victory_state == VicS_Undecided) {
+                player_snapshot->mappos = camera->mappos;
+            } else {
+                memset(&player_snapshot->mappos, 0, sizeof(player_snapshot->mappos));
+            }
             player_snapshot->checksum = compute_player_checksum(player);
         }
         for (struct Room* room = start_rooms; room < end_rooms; room++) {
@@ -328,7 +359,7 @@ void update_turn_checksums(void) {
     things_sum += checksums->effect_gens;
     things_sum += checksums->doors;
 
-    struct Packet* packet = get_packet(my_player_number);
+    struct Packet* packet = get_local_packet();
     packet->checksum = 0;
     packet->checksum += things_sum;
     packet->checksum += checksums->rooms;

@@ -18,10 +18,9 @@
 /******************************************************************************/
 #include "pre_inc.h"
 #include "net_resync.h"
-#include "bflib_network_internal.h"
-#include "bflib_network.h"
 #include "bflib_datetm.h"
-#include "bflib_network_exchange.h"
+#include "net_exchange_gameplay.h"
+#include "net_main.h"
 #include <zlib.h>
 #include "globals.h"
 #include "frontend.h"
@@ -31,16 +30,13 @@
 #include "lens_api.h"
 #include "lua_base.h"
 #include "net_input_lag.h"
-#include "net_received_packets.h"
-#include "net_redundant_packets.h"
 #include "net_checksums.h"
+#include "keeperfx.hpp"
 #include "post_inc.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-extern void draw_out_of_sync_box(long a1, long a2, long box_width);
 
 struct Boing {
   unsigned char active_panel_menu_index;
@@ -68,38 +64,38 @@ static struct Boing boing;
 TbBool detailed_multiplayer_logging = false;
 
 #define RESYNC_RECEIVE_TIMEOUT_MS 30000
-#define RESYNC_TIMESYNC_TIMEOUT_MS 15000
-static long g_timesync_offset_ms = 0;
-static TbClockMSec g_client_rtt_ms = 0;
 
 struct ResyncHeader {
     unsigned char message_type;
-    unsigned int compressed_length;
-    unsigned int original_length;
-    unsigned int data_checksum;
+    uint32_t compressed_length;
+    uint32_t original_length;
+    uint32_t data_checksum;
 };
 
-struct ResumeMessage {
-    unsigned char message_type;
-    TbClockMSec resume_time;
-};
 
-struct TimeSyncComplete {
-    unsigned char message_type;
-    TbClockMSec client_rtt;
-};
+// function to intentionally desync the game state for testing purposes
+void intentional_desync() {
+    if (!is_my_player_number(0)) {
+        return;
+    }
+    struct Room* start_rooms = &game.rooms[1];
+    struct Room* end_rooms = &game.rooms[ROOMS_COUNT];
 
-struct TimeSyncRequest {
-    unsigned char message_type;
-    TbClockMSec client_send_time;
-};
-
-struct TimeSyncResponse {
-    unsigned char message_type;
-    TbClockMSec client_send_time;
-    TbClockMSec host_receive_time;
-    TbClockMSec host_send_time;
-};
+    for (struct Room* room = start_rooms; room < end_rooms; room += 1) {
+        if (room_exists(room)) {
+            room->slabs_count += 1;
+            break;
+        }
+    }
+    int i = game.thing_lists[TngList_Creatures].index;
+    if (i != 0) {
+        struct Thing* thing = thing_get(i);
+        if (!thing_is_invalid(thing)) {
+            thing->health += 1;
+        }
+    }
+    get_player(0)->instance_remain_turns += 1;
+}
 
 void animate_resync_progress_bar(int current_phase, int total_phases) {
     if (get_gameturn() == 0) {
@@ -155,82 +151,84 @@ void recall_localised_game_structure(void) {
     game.manufactr_tooltip = boing.manufactr_tooltip;
 }
 
-static TbBool send_resync_data(const void * buffer, size_t total_length) {
-    MULTIPLAYER_LOG("Starting to send resync data: %lu bytes uncompressed", (unsigned long)total_length);
-    
-    uLong data_crc = crc32(0L, Z_NULL, 0);
-    data_crc = crc32(data_crc, (const Bytef*)buffer, total_length);
+static TbBool send_resync_data(const void * buffer, size_t total_length)
+{
+    if (total_length > UINT32_MAX) {
+        ERRORLOG("Resync data too large");
+        return false;
+    }
 
     uLongf compressed_size = compressBound(total_length);
-    char * compressed_buffer = (char *) malloc(compressed_size);
-    if (!compressed_buffer) {
-        ERRORLOG("Failed to allocate buffer for compression (bound: %lu bytes)", (unsigned long)compressed_size);
+    if (compressed_size > UINT32_MAX - sizeof(ResyncHeader)) {
+        ERRORLOG("Compressed resync data too large");
         return false;
     }
 
-    int compress_result = compress((Bytef*)compressed_buffer, &compressed_size, (const Bytef*)buffer, total_length);
+    size_t message_size = sizeof(ResyncHeader) + compressed_size;
+    char * message_buffer = (char *) malloc(message_size);
+    if (message_buffer == NULL) {
+        ERRORLOG("Failed to allocate message buffer");
+        return false;
+    }
+
+    int compress_result = compress((Bytef *)(message_buffer + sizeof(ResyncHeader)), &compressed_size, (const Bytef *)buffer, total_length);
     if (compress_result != Z_OK) {
         ERRORLOG("Compression failed: zlib error %d", compress_result);
-        free(compressed_buffer);
+        free(message_buffer);
         return false;
     }
 
-    NETLOG("Compression successful: %lu -> %lu bytes (ratio: %.2f%%)",
-           (unsigned long)total_length, (unsigned long)compressed_size,
-           ((double)compressed_size / total_length) * 100.0);
+    uLong data_crc = crc32(0L, Z_NULL, 0);
+    data_crc = crc32(data_crc, (const Bytef *)buffer, total_length);
+    NETLOG("Compression successful: %u -> %u bytes", (uint32_t)total_length, (uint32_t)compressed_size);
 
     ResyncHeader header;
     memset(&header, 0, sizeof(header));
     header.message_type = NETMSG_RESYNC_DATA;
-    header.compressed_length = compressed_size;
-    header.original_length = total_length;
-    header.data_checksum = (unsigned int)data_crc;
+    header.compressed_length = (uint32_t)compressed_size;
+    header.original_length = (uint32_t)total_length;
+    header.data_checksum = (uint32_t)data_crc;
 
-    size_t message_size = sizeof(ResyncHeader) + compressed_size;
-    char * message_buffer = (char *) malloc(message_size);
-    if (!message_buffer) {
-        ERRORLOG("Failed to allocate message buffer");
-        free(compressed_buffer);
-        return false;
-    }
-
+    message_size = sizeof(ResyncHeader) + compressed_size;
     memcpy(message_buffer, &header, sizeof(ResyncHeader));
-    memcpy(message_buffer + sizeof(ResyncHeader), compressed_buffer, compressed_size);
 
     NETLOG("Host: Sending resync data to all clients");
-    for (NetUserId user_index = 0; user_index < MAX_N_USERS; ++user_index) {
+    for (NetUserId user_index = 0; user_index < MAX_NET_USERS; ++user_index) {
         if (netstate.users[user_index].progress != USER_LOGGEDIN) {
             continue;
         }
         netstate.sp->sendmsg_single(netstate.users[user_index].id, message_buffer, message_size);
     }
 
-    free(compressed_buffer);
     free(message_buffer);
     return true;
 }
 
-static TbBool receive_resync_data(void * destination_buffer, size_t expected_total_length) {
-    NETLOG("Starting to receive resync data, expecting %lu bytes", (unsigned long)expected_total_length);
+static TbBool receive_resync_data(char ** data_buffer, size_t * data_length)
+{
+    NETLOG("Starting to receive resync data");
 
     TbClockMSec start_time = LbTimerClock();
     while (LbTimerClock() - start_time < RESYNC_RECEIVE_TIMEOUT_MS) {
         netstate.sp->update(OnNewUser);
-        size_t ready = netstate.sp->msgready(SERVER_ID, 0);
-        if (ready == 0) {
+        size_t received_size = netstate.sp->msgready(SERVER_ID, 0);
+        if (received_size == 0) {
             continue;
         }
 
-        size_t max_message_size = sizeof(ResyncHeader) + compressBound(expected_total_length);
-        char * message_buffer = (char *) malloc(max_message_size);
-        if (!message_buffer) {
+        char * message_buffer = (char *) malloc(received_size);
+        if (message_buffer == NULL) {
             ERRORLOG("Failed to allocate message buffer");
             return false;
         }
 
-        size_t received_size = netstate.sp->readmsg(SERVER_ID, message_buffer, max_message_size);
+        received_size = netstate.sp->readmsg(SERVER_ID, message_buffer, received_size);
         if (received_size < sizeof(ResyncHeader)) {
-            ERRORLOG("Received message too small: %lu bytes", (unsigned long)received_size);
+            if (received_size > 0 && message_buffer[0] == NETMSG_RESYNC_DATA) {
+                ERRORLOG("Received incomplete resync data: %u bytes", (uint32_t)received_size);
+            } else {
+                ERRORLOG("Ignoring message too small for resync data: %u bytes", (uint32_t)received_size);
+            }
             free(message_buffer);
             continue;
         }
@@ -244,41 +242,54 @@ static TbBool receive_resync_data(void * destination_buffer, size_t expected_tot
             continue;
         }
 
-        if (header.original_length != expected_total_length) {
-            ERRORLOG("Received data with wrong size: %lu != %lu", (unsigned long)header.original_length, (unsigned long)expected_total_length);
+        if (header.compressed_length != received_size - sizeof(ResyncHeader)) {
+            ERRORLOG("Received message size mismatch: %u != %u",
+                (uint32_t)(received_size - sizeof(ResyncHeader)), header.compressed_length);
+            free(message_buffer);
+            continue;
+        }
+        if (*data_length != 0 && header.original_length != *data_length) {
+            ERRORLOG("Received data with wrong size: %u != %u", header.original_length, (uint32_t)*data_length);
             free(message_buffer);
             continue;
         }
 
-        if (received_size != sizeof(ResyncHeader) + header.compressed_length) {
-            ERRORLOG("Received message size mismatch: %lu != %lu + %lu",
-                   (unsigned long)received_size, (unsigned long)sizeof(ResyncHeader), (unsigned long)header.compressed_length);
+        size_t output_size = header.original_length;
+        if (output_size == 0) {
+            output_size = 1;
+        }
+        char * output_buffer = (char *) malloc(output_size);
+        if (output_buffer == NULL) {
+            ERRORLOG("Failed to allocate resync destination buffer");
             free(message_buffer);
-            continue;
+            return false;
         }
 
-        MULTIPLAYER_LOG("Client: Received resync message, decompressing %lu bytes", (unsigned long)header.compressed_length);
+        uLongf dest_len = output_size;
 
-        uLongf dest_len = expected_total_length;
-        int uncompress_result = uncompress((Bytef*)destination_buffer, &dest_len,
-                                           (const Bytef*)(message_buffer + sizeof(ResyncHeader)),
-                                           header.compressed_length);
+        MULTIPLAYER_LOG("Client: Received resync message, decompressing %u bytes", header.compressed_length);
 
-        if (uncompress_result != Z_OK || dest_len != expected_total_length) {
-            ERRORLOG("Decompression failed: zlib error %d, expected %lu bytes, got %lu bytes",
-                   uncompress_result, (unsigned long)expected_total_length, (unsigned long)dest_len);
+        int uncompress_result = uncompress((Bytef *)output_buffer, &dest_len,
+            (const Bytef *)(message_buffer + sizeof(ResyncHeader)), header.compressed_length);
+        if (uncompress_result != Z_OK || dest_len != header.original_length) {
+            ERRORLOG("Decompression failed: zlib error %d, expected %u bytes, got %u bytes",
+                uncompress_result, header.original_length, (uint32_t)dest_len);
+            free(output_buffer);
             free(message_buffer);
             return false;
         }
 
         uLong verify_crc = crc32(0L, Z_NULL, 0);
-        verify_crc = crc32(verify_crc, (const Bytef*)destination_buffer, expected_total_length);
-        if ((unsigned long)verify_crc != header.data_checksum) {
+        verify_crc = crc32(verify_crc, (const Bytef *)output_buffer, header.original_length);
+        if ((uint32_t)verify_crc != header.data_checksum) {
             ERRORLOG("Resync data checksum mismatch");
+            free(output_buffer);
             free(message_buffer);
             return false;
         }
 
+        *data_buffer = output_buffer;
+        *data_length = header.original_length;
         free(message_buffer);
         NETLOG("Client: Resync data received successfully");
         return true;
@@ -288,17 +299,23 @@ static TbBool receive_resync_data(void * destination_buffer, size_t expected_tot
     return false;
 }
 
-TbBool LbNetwork_Resync(void * data_buffer, size_t buffer_length) {
-    MULTIPLAYER_LOG("Starting resync, my_id=%d, buffer_length=%lu", netstate.my_id, (unsigned long)buffer_length);
-    const TbBool is_host = (my_player_number == get_host_player_id());
+TbBool LbNetwork_Resync(void * data_buffer, size_t buffer_length)
+{
+    MULTIPLAYER_LOG("Starting resync, my_id=%d, buffer_length=%u", netstate.my_id, (uint32_t)buffer_length);
 
     TbBool result;
-    if (is_host) {
+    if (network_is_host()) {
         MULTIPLAYER_LOG("Resync: I am the server");
         result = send_resync_data(data_buffer, buffer_length);
     } else {
         MULTIPLAYER_LOG("Resync: I am a client, receiving");
-        result = receive_resync_data(data_buffer, buffer_length);
+        char * received_data = NULL;
+        size_t received_length = buffer_length;
+        result = receive_resync_data(&received_data, &received_length);
+        if (result) {
+            memcpy(data_buffer, received_data, buffer_length);
+        }
+        free(received_data);
     }
 
     if (!result) {
@@ -310,32 +327,95 @@ TbBool LbNetwork_Resync(void * data_buffer, size_t buffer_length) {
     return true;
 }
 
-TbBool send_resync_game(void) {
-  pack_desync_history_for_resync();
-  clear_flag(game.operation_flags, GOF_Paused);
-  animate_resync_progress_bar(0, 6);
-  NETLOG("Initiating re-synchronization of network game");
-  TbBool result = LbNetwork_Resync(&game, sizeof(game));
-  if (!result) {
-    return false;
-  }
-  animate_resync_progress_bar(2, 6);
-  LbNetwork_TimesyncBarrier();
-  animate_resync_progress_bar(6, 6);
-  NETLOG("Host: Resync complete");
-  return true;
-}
-
-TbBool receive_resync_game(void) {
+TbBool send_resync_game(void)
+{
+    pack_desync_history_for_resync();
     clear_flag(game.operation_flags, GOF_Paused);
     animate_resync_progress_bar(0, 6);
     NETLOG("Initiating re-synchronization of network game");
-    TbBool result = LbNetwork_Resync(&game, sizeof(game));
+
+    const char * lua_data = "";
+    size_t lua_data_len = 0;
+    if (Lvl_script != NULL) {
+        lua_data = lua_get_serialised_data(&lua_data_len);
+        if (lua_data == NULL) {
+            cleanup_serialized_data();
+            return false;
+        }
+    }
+    size_t lua_data_offset = sizeof(game) + sizeof(uint32_t);
+    if (lua_data_len > UINT32_MAX - lua_data_offset) {
+        ERRORLOG("Full resync data too large");
+        cleanup_serialized_data();
+        return false;
+    }
+
+    size_t full_resync_len = lua_data_offset + lua_data_len;
+    char * full_resync_data = (char *) malloc(full_resync_len);
+    if (full_resync_data == NULL) {
+        ERRORLOG("Failed to allocate full resync buffer");
+        cleanup_serialized_data();
+        return false;
+    }
+
+    uint32_t lua_data_len32 = (uint32_t)lua_data_len;
+    memcpy(full_resync_data, &game, sizeof(game));
+    memcpy(full_resync_data + sizeof(game), &lua_data_len32, sizeof(lua_data_len32));
+    memcpy(full_resync_data + lua_data_offset, lua_data, lua_data_len);
+    TbBool result = send_resync_data(full_resync_data, full_resync_len);
+    free(full_resync_data);
+    cleanup_serialized_data();
     if (!result) {
         return false;
     }
     animate_resync_progress_bar(2, 6);
-    LbNetwork_TimesyncBarrier();
+    animate_resync_progress_bar(6, 6);
+    NETLOG("Host: Resync complete");
+    return true;
+}
+
+TbBool receive_resync_game(void)
+{
+    clear_flag(game.operation_flags, GOF_Paused);
+    animate_resync_progress_bar(0, 6);
+    NETLOG("Initiating re-synchronization of network game");
+    char * full_resync_data = NULL;
+    size_t full_resync_len = 0;
+    uint32_t lua_data_len = 0;
+    size_t lua_data_offset = sizeof(game) + sizeof(lua_data_len);
+
+    if (!receive_resync_data(&full_resync_data, &full_resync_len)) {
+        return false;
+    }
+
+    if (full_resync_len < lua_data_offset) {
+        ERRORLOG("Full resync data too small: %u bytes", (uint32_t)full_resync_len);
+        free(full_resync_data);
+        return false;
+    }
+
+    memcpy(&lua_data_len, full_resync_data + sizeof(game), sizeof(lua_data_len));
+    if (lua_data_len != full_resync_len - lua_data_offset) {
+        ERRORLOG("Received lua data with wrong size: %u != %u", lua_data_len, (uint32_t)(full_resync_len - lua_data_offset));
+        free(full_resync_data);
+        return false;
+    }
+
+    if (Lvl_script == NULL && lua_data_len > 0) {
+        ERRORLOG("Lua state is not initialized");
+        free(full_resync_data);
+        return false;
+    }
+
+    if (Lvl_script != NULL && !lua_set_serialised_data(full_resync_data + lua_data_offset, lua_data_len)) {
+        free(full_resync_data);
+        return false;
+    }
+
+    memcpy(&game, full_resync_data, sizeof(game));
+    free(full_resync_data);
+
+    animate_resync_progress_bar(2, 6);
     animate_resync_progress_bar(6, 6);
     NETLOG("Client: Resync complete");
 
@@ -345,16 +425,21 @@ TbBool receive_resync_game(void) {
 }
 
 
-void resync_game(void) {
+void resync_game(void)
+{
     SYNCDBG(2,"Starting");
-    struct PlayerInfo* player = get_my_player();
-    draw_out_of_sync_box(0, 32*units_per_pixel/16, player->engine_window_x);
+    draw_out_of_sync_box(0, 32*units_per_pixel/16, local_state.engine_window_x);
     reset_eye_lenses();
     store_localised_game_structure();
-    if (my_player_number == get_host_player_id()) {
-        send_resync_game();
+    TbBool result;
+    if (network_is_host()) {
+        result = send_resync_game();
     } else {
-        receive_resync_game();
+        result = receive_resync_game();
+    }
+    if (!result) {
+        recall_localised_game_structure();
+        return;
     }
     if (Lvl_script != NULL) {
         lua_set_random_seed(game.action_random_seed);
@@ -363,218 +448,11 @@ void resync_game(void) {
     reinit_level_after_load();
 
     game.skip_initial_input_turns = calculate_skip_input();
-    clear_packet_tracking();
-    clear_redundant_packets();
-    clear_input_lag_queue();
+    initialize_packet_history();
     NETLOG("Input lag after resync: %d turns", game.input_lag_turns);
 
     clear_flag(game.system_flags, GSF_NetGameNoSync);
     clear_flag(game.system_flags, GSF_NetSeedNoSync);
-}
-
-void LbNetwork_TimesyncBarrier(void) {
-    if (game.game_kind != GKind_MultiGame) {
-        return;
-    }
-    const TbBool is_host = (my_player_number == get_host_player_id());
-    if (is_host) {
-        MULTIPLAYER_LOG("Host: Handling any pending timesync requests");
-        TbBool timesynced[MAX_N_USERS];
-        for (NetUserId i = 0; i < MAX_N_USERS; ++i) {
-            if (i == netstate.my_id) {
-                timesynced[i] = 1;
-            } else if (netstate.users[i].progress == USER_LOGGEDIN) {
-                timesynced[i] = 0;
-            } else {
-                timesynced[i] = 1;
-            }
-        }
-        g_client_rtt_ms = 0;
-        TbClockMSec wait_start = LbTimerClock();
-        TbClockMSec last_anim_time = wait_start;
-        while (LbTimerClock() - wait_start < RESYNC_TIMESYNC_TIMEOUT_MS) {
-            netstate.sp->update(OnNewUser);
-            for (NetUserId id = 0; id < MAX_N_USERS; ++id) {
-                if (id == netstate.my_id) continue;
-                if (netstate.users[id].progress != USER_LOGGEDIN) continue;
-                while (netstate.sp->msgready(id, 0)) {
-                    size_t sz = netstate.sp->readmsg(id, netstate.msg_buffer, sizeof(netstate.msg_buffer));
-                    if (sz >= sizeof(TimeSyncRequest) && netstate.msg_buffer[0] == NETMSG_TIMESYNC_REQUEST) {
-                        TimeSyncRequest req;
-                        memcpy(&req, netstate.msg_buffer, sizeof(TimeSyncRequest));
-                        TbClockMSec receive_time = LbTimerClock();
-                        TimeSyncResponse rsp;
-                        rsp.message_type = NETMSG_TIMESYNC_REPLY;
-                        rsp.client_send_time = req.client_send_time;
-                        rsp.host_receive_time = receive_time;
-                        rsp.host_send_time = LbTimerClock();
-                        netstate.sp->sendmsg_single(netstate.users[id].id, (const char *)&rsp, sizeof(rsp));
-                    } else if (sz >= sizeof(TimeSyncComplete) && netstate.msg_buffer[0] == NETMSG_TIMESYNC_COMPLETE) {
-                        TimeSyncComplete complete;
-                        memcpy(&complete, netstate.msg_buffer, sizeof(TimeSyncComplete));
-                        g_client_rtt_ms = complete.client_rtt;
-                        MULTIPLAYER_LOG("Host: Received RTT from client %d: %lu ms", id, (unsigned long)g_client_rtt_ms);
-                        timesynced[id] = 1;
-                    }
-                }
-            }
-            TbBool all_done = 1;
-            for (NetUserId id = 0; id < MAX_N_USERS; ++id) {
-                if (!timesynced[id]) {
-                    all_done = 0;
-                    break;
-                }
-            }
-            if (all_done) {
-                break;
-            }
-            TbClockMSec now = LbTimerClock();
-            if (now - last_anim_time >= 100) {
-                animate_resync_progress_bar(3, 6);
-                last_anim_time = now;
-            }
-        }
-        LbSleepFor(100);
-        for (NetUserId id = 0; id < MAX_N_USERS; ++id) {
-            if (id == netstate.my_id) continue;
-            if (netstate.users[id].progress != USER_LOGGEDIN) continue;
-            if (!timesynced[id]) {
-                ERRORLOG("Host: Timesync timeout for client index %d, dropping", id);
-                netstate.sp->drop_user(id);
-            }
-        }
-        TbClockMSec current_time = LbTimerClock();
-        TbClockMSec delay = 500;
-        if (g_client_rtt_ms > 0) {
-            delay = g_client_rtt_ms * 3;
-            if (delay < 100) {
-                delay = 100;
-            }
-            if (delay > 1000) {
-                delay = 1000;
-            }
-        }
-        TbClockMSec resume_time = current_time + delay;
-        ResumeMessage message;
-        message.message_type = NETMSG_RESYNC_RESUME;
-        message.resume_time = resume_time;
-        MULTIPLAYER_LOG("Host: Broadcasting RESUME to all clients (current=%lu, resume=%lu, delay=%lu, client_rtt=%lu)", (unsigned long)current_time, (unsigned long)resume_time, (unsigned long)delay, (unsigned long)g_client_rtt_ms);
-        for (NetUserId user_index = 0; user_index < MAX_N_USERS; ++user_index) {
-            if (netstate.users[user_index].progress != USER_LOGGEDIN) {
-                continue;
-            }
-            netstate.sp->sendmsg_single(netstate.users[user_index].id, (char*)&message, sizeof(ResumeMessage));
-        }
-        TbClockMSec now = LbTimerClock();
-        if (resume_time > now) {
-            TbClockMSec wait_delay = resume_time - now;
-            MULTIPLAYER_LOG("Current time %lu, waiting until %lu (delay %lu ms)", (unsigned long)now, (unsigned long)resume_time, (unsigned long)wait_delay);
-            TbClockMSec end_time = now + wait_delay;
-            if (wait_delay > 10) {
-                TbClockMSec sleep_until = end_time - 5;
-                while (LbTimerClock() < sleep_until) {
-                    LbSleepFor(1);
-                }
-            }
-            while (LbTimerClock() < end_time) {
-            }
-        }
-        MULTIPLAYER_LOG("Host: Timesync barrier complete");
-    } else {
-        TbClockMSec t1 = LbTimerClock();
-        TimeSyncRequest req;
-        req.message_type = NETMSG_TIMESYNC_REQUEST;
-        req.client_send_time = t1;
-        netstate.sp->sendmsg_single(SERVER_ID, (const char *)&req, sizeof(req));
-        MULTIPLAYER_LOG("Client: Sent TIMESYNC request at t1=%lu", (unsigned long)t1);
-        TbClockMSec start = LbTimerClock();
-        TbClockMSec last_anim_time = start;
-        while (LbTimerClock() - start < RESYNC_TIMESYNC_TIMEOUT_MS) {
-            netstate.sp->update(OnNewUser);
-            while (netstate.sp->msgready(SERVER_ID, 0)) {
-                size_t got = netstate.sp->readmsg(SERVER_ID, netstate.msg_buffer, sizeof(netstate.msg_buffer));
-                TbClockMSec t4 = LbTimerClock();
-                if (got >= sizeof(TimeSyncResponse)) {
-                    TimeSyncResponse rsp;
-                    memcpy(&rsp, netstate.msg_buffer, sizeof(TimeSyncResponse));
-                    if (rsp.message_type == NETMSG_TIMESYNC_REPLY) {
-                        TbClockMSec rtt = t4 - rsp.client_send_time;
-                        long long offset = ((long long)rsp.host_receive_time - (long long)rsp.client_send_time + (long long)rsp.host_send_time - (long long)t4) / 2;
-                        g_timesync_offset_ms = (long)offset;
-                        MULTIPLAYER_LOG("Client: TIMESYNC complete: t1=%lld t2=%lld t3=%lld t4=%lld rtt=%lu offset=%ld ms (host ahead)", (long long)rsp.client_send_time, (long long)rsp.host_receive_time, (long long)rsp.host_send_time, (long long)t4, (unsigned long)rtt, g_timesync_offset_ms);
-                        TimeSyncComplete complete;
-                        complete.message_type = NETMSG_TIMESYNC_COMPLETE;
-                        complete.client_rtt = rtt;
-                        netstate.sp->sendmsg_single(SERVER_ID, (const char *)&complete, sizeof(complete));
-                        goto timesync_done;
-                    }
-                }
-            }
-            TbClockMSec now = LbTimerClock();
-            if (now - last_anim_time >= 100) {
-                animate_resync_progress_bar(3, 6);
-                last_anim_time = now;
-            }
-        }
-        ERRORLOG("Client: TIMESYNC timeout");
-        LbNetwork_Stop();
-        return;
-timesync_done:
-        MULTIPLAYER_LOG("Client: Waiting for RESUME message from host");
-        TbClockMSec start_time = LbTimerClock();
-        last_anim_time = start_time;
-        TbClockMSec resume_time = 0;
-        TbBool received = false;
-        while (LbTimerClock() - start_time < 10000) {
-            netstate.sp->update(OnNewUser);
-            while (netstate.sp->msgready(SERVER_ID, 0)) {
-                size_t sz = netstate.sp->readmsg(SERVER_ID, netstate.msg_buffer, sizeof(netstate.msg_buffer));
-                if (sz >= sizeof(ResumeMessage)) {
-                    ResumeMessage msg;
-                    memcpy(&msg, netstate.msg_buffer, sizeof(ResumeMessage));
-                    if (msg.message_type == NETMSG_RESYNC_RESUME) {
-                        long long host_time = (long long)msg.resume_time;
-                        long long offset = (long long)g_timesync_offset_ms;
-                        long long local_time = host_time - offset;
-                        if (local_time < 0) {
-                            local_time = 0;
-                        }
-                        resume_time = (TbClockMSec)local_time;
-                        MULTIPLAYER_LOG("Client: Received RESUME from host, host_time=%lld offset=%lld local_time=%lld", host_time, offset, local_time);
-                        received = true;
-                        break;
-                    }
-                }
-            }
-            if (received) {
-                break;
-            }
-            TbClockMSec now = LbTimerClock();
-            if (now - last_anim_time >= 100) {
-                animate_resync_progress_bar(4, 6);
-                last_anim_time = now;
-            }
-        }
-        if (!received) {
-            ERRORLOG("Client: Timeout waiting for RESUME from host");
-            return;
-        }
-        TbClockMSec now = LbTimerClock();
-        if (resume_time > now) {
-            TbClockMSec wait_delay = resume_time - now;
-            MULTIPLAYER_LOG("Current time %lu, waiting until %lu (delay %lu ms)", (unsigned long)now, (unsigned long)resume_time, (unsigned long)wait_delay);
-            TbClockMSec end_time = now + wait_delay;
-            if (wait_delay > 10) {
-                TbClockMSec sleep_until = end_time - 5;
-                while (LbTimerClock() < sleep_until) {
-                    LbSleepFor(1);
-                }
-            }
-            while (LbTimerClock() < end_time) {
-            }
-        }
-        MULTIPLAYER_LOG("Client: Timesync barrier complete");
-    }
 }
 
 #ifdef __cplusplus

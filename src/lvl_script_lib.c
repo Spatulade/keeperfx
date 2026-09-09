@@ -16,14 +16,15 @@
 #include "globals.h"
 #include "config_creature.h"
 #include "creature_states_pray.h"
+#include "custom_sprites.h"
+#include "sprites.h"
 #include "dungeon_data.h"
 #include "gui_msgs.h"
 #include "lvl_filesdk1.h"
 #include "lvl_script_lib.h"
 #include "lvl_script_conditions.h"
-#include "lvl_script_commands.h"
-#include "magic_powers.h"
 #include "room_util.h"
+#include "thing_corpses.h"
 #include "thing_factory.h"
 #include "thing_navigate.h"
 #include "thing_physics.h"
@@ -33,6 +34,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 struct ScriptValue *allocate_script_value(void)
 {
     if (game.script.values_num >= SCRIPT_VALUES_COUNT)
@@ -96,6 +98,14 @@ struct Thing *script_process_new_object(ThingModel tngmodel, MapSubtlCoord stl_x
         if (dungeon->backup_heart_idx == 0)
         {
             dungeon->backup_heart_idx = thing->index;
+        } else
+        {
+            struct Thing* backup = thing_get(dungeon->backup_heart_idx);
+            if (!thing_is_dungeon_heart(backup))
+            {
+                ERRORLOG("%s had invalid backup heart %s", player_code_name(plyr_idx), thing_model_name(backup));
+                dungeon->backup_heart_idx = thing->index;
+            }
         }
     }
     // Try to move thing out of the solid wall if it's inside one
@@ -162,6 +172,105 @@ struct Thing* script_process_new_effectgen(ThingModel tngmodel, TbMapLocation lo
         }
     }
     return thing;
+}
+
+struct Thing* script_process_new_corpse(ThingModel tngmodel, MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, CrtrExpLevel exp_level, TbBool dying)
+{
+    struct Coord3d pos;
+    pos.x.val = subtile_coord_center(stl_x);
+    pos.y.val = subtile_coord_center(stl_y);
+    pos.z.val = get_floor_height_at(&pos);
+
+    int16_t crpscondition = DCrSt_LongDead;
+    if (dying)
+    {
+        crpscondition = DCrSt_Dying;
+    }
+
+    struct Thing* thing = create_dead_creature(&pos, tngmodel, crpscondition, plyr_idx, exp_level);
+    if (thing_is_invalid(thing))
+    {
+        ERRORLOG("Couldn't create %s at location %d, %d", thing_class_and_model_name(TCls_DeadCreature, tngmodel), stl_x, stl_y);
+        return INVALID_THING;
+    }
+    
+    // Try to move thing out of the solid wall if it's inside one
+    if (thing_in_wall_at(thing, &thing->mappos))
+    {
+        if (!move_creature_to_nearest_valid_position(thing))
+        {
+            ERRORLOG("The %s was created in wall, removing", thing_model_name(thing));
+            destroy_thing(thing);
+            return INVALID_THING;
+        }
+    }
+    return thing;
+}
+
+TbBool script_new_creature_type(const char *name)
+{
+    if (game.conf.crtr_conf.model_count >= CREATURE_TYPES_MAX)
+    {
+        SCRPTERRLOG("Cannot increase creature type count for creature type '%s', already at maximum %d types.", name, CREATURE_TYPES_MAX);
+        return false;
+    }
+    for (int j = 0; j < (game.conf.crtr_conf.model_count - 1); j++)
+    {
+        if (strcmp(creature_desc[j].name, name) == 0)
+        {
+            SCRPTERRLOG("Trying to add creature type that already exists: %s", name);
+            return false;
+        }
+    }
+    int i = game.conf.crtr_conf.model_count;
+    game.conf.crtr_conf.model_count++;
+    snprintf(game.conf.crtr_conf.model[i].name, COMMAND_WORD_LEN, "%s", name);
+    creature_desc[i - 1].name = game.conf.crtr_conf.model[i].name;
+    creature_desc[i - 1].num = i;
+    
+    if (load_default_creaturemodel_config(i, 0))
+    {
+        SCRPTLOG("Adding creature type %s and increasing creature types to %d", creature_code_name(i), game.conf.crtr_conf.model_count - 1);
+        return true;
+    }
+    else
+    {
+        SCRPTERRLOG("Failed to load config for creature '%s'(%d).", game.conf.crtr_conf.model[i].name, i);
+    }
+    return false;
+}
+
+TbBool script_copy_creature_type(ThingModel source_id, const char* name)
+{
+    if (game.conf.crtr_conf.model_count >= CREATURE_TYPES_MAX)
+    {
+        SCRPTERRLOG("Cannot increase creature type count for creature type '%s', already at maximum %d types.", name, CREATURE_TYPES_MAX);
+        return false;
+    }
+    for (int j = 0; j < (game.conf.crtr_conf.model_count - 1); j++)
+    {
+        if (strcmp(creature_desc[j].name, name) == 0)
+        {
+            SCRPTERRLOG("Trying to add creature type that already exists: %s", name);
+            return false;
+        }
+    }
+    int i = game.conf.crtr_conf.model_count;
+    game.conf.crtr_conf.model_count++;
+    
+
+//    init_creature_model_stats(i);
+    game.conf.crtr_conf.model[i] = game.conf.crtr_conf.model[source_id];
+    snprintf(game.conf.crtr_conf.model[i].name, COMMAND_WORD_LEN, "%s", name);
+    creature_desc[i - 1].name = game.conf.crtr_conf.model[i].name;
+    creature_desc[i - 1].num = i;
+    for (int k = 0; k < CREATURE_GRAPHICS_INSTANCES; k++)
+    {
+        game.conf.crtr_conf.creature_graphics[i][k] = game.conf.crtr_conf.creature_graphics[source_id][k];
+    }
+    game.conf.crtr_conf.creature_sounds[i] = game.conf.crtr_conf.creature_sounds[source_id];
+
+    return true;
 }
 
 void set_variable(int player_idx, long var_type, long var_idx, long new_val)
@@ -236,9 +345,63 @@ long get_players_range_single_f(long plr_range_id, const char *func_name, long l
     return -2;
 }
 
-void get_chat_icon_from_value(const char* txt, char* id, char* type)
+short get_chat_icon_sprite_idx_from_id(short id, char type)
 {
-    char idx;
+    switch (type)
+    {
+        case MsgType_Player:
+            if (player_is_roaming(id))
+                return GPS_plyrsym_symbol_player_red_std_b;
+
+            if (id == game.neutral_player_num)
+                return ((get_gameturn() >> 1) & 3)
+                    + GPS_plyrsym_symbol_player_red_std_b;
+
+            return player_has_heart(id)
+                ? GPS_plyrsym_symbol_player_red_std_b
+                : GPS_plyrsym_symbol_player_red_dead;
+
+        case MsgType_Creature:
+            return get_creature_model_graphics(id, CGI_HandSymbol);
+
+        case MsgType_CreatureSpell:
+            return get_spell_config(id)->medsym_sprite_idx;
+
+        case MsgType_Room:
+            return get_room_kind_stats(id)->medsym_sprite_idx;
+
+        case MsgType_KeeperSpell:
+            return get_power_model_stats(id)->medsym_sprite_idx;
+
+        case MsgType_Query:
+            return id + GPS_plyrsym_symbol_room_yellow_std_a;
+
+        case MsgType_CreatureInstance:
+            return creature_instance_info_get(id)->symbol_spridx;
+
+        case MsgType_Custom:
+            return id;
+
+        case MsgType_Blank:
+        default:
+            return -1;
+    }
+}
+
+short get_chat_icon_sprite_idx(const char* txt)
+{
+    short id = 0;
+    char type = 0;
+
+    get_chat_icon_from_value(txt, &id, &type);
+
+    return get_chat_icon_sprite_idx_from_id(id, type);
+}
+
+
+void get_chat_icon_from_value(const char* txt, short* id, char* type)
+{
+    short idx;
     if (strcasecmp(txt, "None") == 0)
     {
         *id = 0;
@@ -354,8 +517,8 @@ void get_chat_icon_from_value(const char* txt, char* id, char* type)
                             }
                             else
                             {
-                                *id = atoi(txt);
-                                *type = MsgType_Player;
+                                *id = get_icon_id(txt);
+                                *type = MsgType_Custom;
                             }
                         }
                     }

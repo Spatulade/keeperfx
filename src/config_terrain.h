@@ -22,6 +22,7 @@
 #include "globals.h"
 #include "bflib_basics.h"
 #include "room_data.h"
+#include "gui_soundmsgs.h"
 
 #include "config.h"
 
@@ -65,13 +66,16 @@ enum SlabFillStyle {
 };
 
 enum RoomCfgFlags {
-    RoCFlg_None            = 0x00,
-    RoCFlg_NoEnsign        = 0x01,
-    RoCFlg_CantVandalize   = 0x02,
-    RoCFlg_BuildTillBroke  = 0x04,
-    RoCFlg_CannotBeSold    = 0x08,
-    RoCFlg_CannotBeClaimed = 0x10,
-    RoCFlg_ListEnd         = 0x20,
+    RoCFlg_None            = 0x000,
+    RoCFlg_NoEnsign        = 0x001,
+    RoCFlg_CantVandalize   = 0x002,
+    RoCFlg_BuildTillBroke  = 0x004,
+    RoCFlg_CannotBeSold    = 0x008,
+    RoCFlg_CannotBeClaimed = 0x010,
+    RoCFlg_NotCounted      = 0x020,
+    RoCFlg_NoFlames        = 0x040,
+    RoCFlg_BoulderDestroys = 0x080,
+    RoCFlg_ListEnd         = 0x100,
 };
 
 /**
@@ -104,6 +108,7 @@ enum RoomRoleFlags {
     RoRoF_CrPoolLeave    = 0x00400000, /**< The room is a gate which allows a creature to leave the players dungeon back to pool. */
     RoRoF_PassWater      = 0x00800000, /**< The room is a bridge for use over water. */
     RoRoF_PassLava       = 0x01000000, /**< The room is a bridge for use over lava. */
+    RoRoF_PassAbyss      = 0x02000000,
 };
 
 struct SlabMap;
@@ -148,9 +153,9 @@ struct RoomConfigStats {
     int32_t medsym_sprite_idx;
     int32_t pointer_sprite_idx;
     uint32_t ambient_snd_smp_id;
-    int32_t msg_needed;
-    int32_t msg_too_small;
-    int32_t msg_no_route;
+    SpeechRef msg_needed;
+    SpeechRef msg_too_small;
+    SpeechRef msg_no_route;
     short cost;
     HitPoints health;
     FuncIdx update_total_capacity_idx;
@@ -186,6 +191,8 @@ TbBool slab_kind_is_room_wall(RoomKind slbkind);
 TbBool slab_kind_is_friable_dirt(RoomKind slbkind);
 TbBool slab_kind_is_door(SlabKind slbkind);
 TbBool slab_kind_is_liquid(SlabKind slbkind);
+TbBool slab_kind_is_bridgeable(SlabKind slbkind);
+int slab_kind_from_wlb_type(unsigned char wlb_type);
 TbBool slab_kind_is_room(SlabKind slbkind);
 TbBool slab_kind_has_torches(SlabKind slbkind);
 /******************************************************************************/
@@ -204,7 +211,7 @@ RoomRole get_room_roles(RoomKind rkind);
 TbBool room_role_matches(RoomKind rkind, RoomRole rrole);
 TbBool room_has_surrounding_flames(RoomKind rkind);
 TbBool room_cannot_vandalise(RoomKind rkind);
-TbBool room_never_buildable(RoomKind rkind);
+TbBool room_is_counted(RoomKind rkind);
 TbBool room_can_have_ensign(RoomKind rkind);
 SlabKind room_corresponding_slab(RoomKind rkind);
 RoomKind slab_corresponding_room(SlabKind slbkind);

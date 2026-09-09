@@ -12,6 +12,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include <inttypes.h>
 #include <math.h>
 #include <string.h>
 #include "bflib_sound.h"
@@ -24,6 +25,7 @@
 #include "config_settings.h"
 #include "config_spritecolors.h"
 #include "config_trapdoor.h"
+#include "config_translation.h"
 #include "console_cmd.h"
 #include "config_rules.h"
 #include "creature_instances.h"
@@ -309,8 +311,6 @@ const struct NamedCommand script_boolean_desc[] = {
 const struct NamedCommand variable_desc[] = {
     {"MONEY",                       SVar_MONEY},
     {"GAME_TURN",                   SVar_GAME_TURN},
-    {"BREAK_IN",                    SVar_BREAK_IN},
-    //{"CREATURE_NUM",              SVar_CREATURE_NUM},
     {"TOTAL_DIGGERS",               SVar_TOTAL_DIGGERS},
     {"TOTAL_CREATURES",             SVar_TOTAL_CREATURES},
     {"TOTAL_RESEARCH",              SVar_TOTAL_RESEARCH},
@@ -378,8 +378,6 @@ const struct NamedCommand variable_desc[] = {
 const struct NamedCommand dk1_variable_desc[] = {
     {"MONEY",                       SVar_MONEY},
     {"GAME_TURN",                   SVar_GAME_TURN},
-    {"BREAK_IN",                    SVar_BREAK_IN},
-    //{"CREATURE_NUM",                SVar_CREATURE_NUM},
     {"TOTAL_IMPS",                  SVar_TOTAL_DIGGERS},
     {"TOTAL_CREATURES",             SVar_CONTROLS_TOTAL_CREATURES},
     {"TOTAL_RESEARCH",              SVar_TOTAL_RESEARCH},
@@ -795,42 +793,486 @@ static void delete_from_party_check(const struct ScriptLine *scline)
     }
 }
 
+static TbBool get_custom_icon_from_value(const char* txt, short* icon_idx);
+static TbBool get_custom_ensign_from_value(const char* txt, short* ensign_id);
+
 static void display_objective_check(const struct ScriptLine *scline)
 {
-  long msg_num = scline->np[0];
-  long x, y;
-  TbMapLocation location = 0;
-  if ((msg_num < 0) || (msg_num >= STRINGS_MAX))
-  {
-    SCRPTERRLOG("Invalid TEXT number");
-    return;
-  }
-  if (scline->command == Cmd_DISPLAY_OBJECTIVE)
-  {
-    const char *where = scline->tp[1];
-    if (!get_map_location_id(where, &location))
+    ALLOCATE_SCRIPT_VALUE(scline->command, ALL_PLAYERS);
+
+    TextStringId  msg_num = get_string_id_by_alias(scline->tp[0]);
+
+    if ((msg_num < 0))
     {
-      return;
+        SCRPTERRLOG("Invalid TEXT number");
+        DEALLOCATE_SCRIPT_VALUE
+        return;
     }
-    command_add_value(Cmd_DISPLAY_OBJECTIVE, ALL_PLAYERS, msg_num, location, 0);
-  }
-  else
-  {
-    x = scline->np[1];
-    y = scline->np[2];
-    command_add_value(Cmd_DISPLAY_OBJECTIVE, ALL_PLAYERS, msg_num, location, get_subtile_number(x,y));
-  }
+
+    MapSubtlCoord x = 0, y = 0;
+    TbMapLocation location = 0;
+    if ((msg_num < 0))
+    {
+        SCRPTERRLOG("Invalid TEXT number");
+        return;
+    }
+    if (scline->command == Cmd_DISPLAY_OBJECTIVE)
+    {
+        const char *where = scline->tp[1];
+        if (!get_map_location_id(where, &location))
+        {
+            DEALLOCATE_SCRIPT_VALUE
+            return;
+        }
+    }
+    else
+    {
+        x = scline->np[1];
+        y = scline->np[2];
+    }
+    value->shorts[0] = msg_num;
+    value->ulongs[1] = location;
+    value->shorts[3] = x;
+    value->shorts[4] = y;
+    value->shorts[5] = -1;
+
+    const char *icon = (scline->command == Cmd_DISPLAY_OBJECTIVE)
+        ? scline->tp[2] : scline->tp[3];
+    if (icon[0] != '\0' && !get_custom_icon_from_value(icon, &value->shorts[5]))
+    {
+        SCRPTERRLOG("Invalid custom icon (%s)", icon);
+        DEALLOCATE_SCRIPT_VALUE
+        return;
+    }
+
+    PROCESS_SCRIPT_VALUE(scline->command);
 }
 
 static void display_objective_process(struct ScriptContext *context)
 {
-    if (my_player_number == context->player_idx)
+    set_general_objective_with_icon(context->value->shorts[0],
+        context->player_idx,
+        context->value->ulongs[1],
+        context->value->shorts[3],
+        context->value->shorts[4],
+        context->value->shorts[5]);
+}
+
+static void display_player_objective_check(const struct ScriptLine* scline)
+{
+    ALLOCATE_SCRIPT_VALUE(scline->command, scline->np[1]);
+    TextStringId  msg_num = get_string_id_by_alias(scline->tp[0]);
+    MapSubtlCoord x = 0, y = 0;
+    TbMapLocation location = 0;
+    if ((msg_num < 0))
     {
-        set_general_objective(context->value->longs[0],
-        context->value->longs[1],
-        stl_num_decode_x(context->value->longs[2]),
-        stl_num_decode_y(context->value->longs[2]));
+        DEALLOCATE_SCRIPT_VALUE
+        SCRPTERRLOG("Invalid TEXT number");
+        return;
     }
+    if (scline->command == Cmd_DISPLAY_PLAYER_OBJECTIVE)
+    {
+        const char* where = scline->tp[2];
+        if (!get_map_location_id(where, &location))
+        {
+            DEALLOCATE_SCRIPT_VALUE
+            return;
+        }
+    }
+    else
+    {
+        x = scline->np[2];
+        y = scline->np[3];
+    }
+    value->shorts[0] = msg_num;
+    value->ulongs[1] = location;
+    value->shorts[3] = x;
+    value->shorts[4] = y;
+    value->shorts[5] = -1;
+
+    const char *icon = (scline->command == Cmd_DISPLAY_PLAYER_OBJECTIVE)
+        ? scline->tp[3] : scline->tp[4];
+    if (icon[0] != '\0' && !get_custom_icon_from_value(icon, &value->shorts[5]))
+    {
+        SCRPTERRLOG("Invalid custom icon (%s)", icon);
+        DEALLOCATE_SCRIPT_VALUE
+        return;
+    }
+
+    PROCESS_SCRIPT_VALUE(scline->command);
+}
+
+static void quick_objective_check(const struct ScriptLine* scline)
+{
+    ALLOCATE_SCRIPT_VALUE(scline->command, ALL_PLAYERS);
+
+    int16_t idx = scline->np[0];
+    if ((idx < 0) || (idx >= QUICK_MESSAGES_COUNT))
+    {
+        SCRPTERRLOG("Invalid objective ID number (%d)", idx);
+        return;
+    }
+    const char* msgtext = scline->tp[1];
+
+    if (strlen(msgtext) >= MESSAGE_TEXT_LEN)
+    {
+        SCRPTWRNLOG("Objective TEXT too long; truncating to %d characters", MESSAGE_TEXT_LEN - 1);
+    }
+    if ((game.quick_messages[idx][0] != '\0') && (strcmp(game.quick_messages[idx], msgtext) != 0))
+    {
+        SCRPTWRNLOG("Quick Message no %d overwritten by different text", idx);
+    }
+    MapSubtlCoord x = 0, y = 0;
+    TbMapLocation location = 0;
+    const char* where = "ALL_PLAYERS";
+
+    snprintf(game.quick_messages[idx], MESSAGE_TEXT_LEN, "%s", msgtext);
+
+    if (scline->command == Cmd_QUICK_OBJECTIVE)
+    {
+        if (scline->tp[2][0] != '\0')
+        {
+            where = scline->tp[2];
+        }
+    }
+    else
+    {
+        x = scline->np[2];
+        y = scline->np[3];
+    }
+    if (!get_map_location_id(where, &location))
+    {
+        SCRPTERRLOG("Invalid location (%s)", scline->tp[2]);
+        return;
+    }
+
+    value->shorts[0] = idx;
+    value->ulongs[1] = location;
+    value->shorts[3] = x;
+    value->shorts[4] = y;
+    value->shorts[5] = -1;
+
+    const char *icon = (scline->command == Cmd_QUICK_OBJECTIVE)
+        ? scline->tp[3] : scline->tp[4];
+    if (icon[0] != '\0' && !get_custom_icon_from_value(icon, &value->shorts[5]))
+    {
+        SCRPTERRLOG("Invalid custom icon (%s)", icon);
+        DEALLOCATE_SCRIPT_VALUE
+        return;
+    }
+
+    PROCESS_SCRIPT_VALUE(scline->command);
+}
+
+static void quick_objective_process(struct ScriptContext* context)
+{
+    process_objective_with_icon(
+        game.quick_messages[context->value->shorts[0] % QUICK_MESSAGES_COUNT],
+        context->player_idx,
+        context->value->ulongs[1],
+        context->value->shorts[3],
+        context->value->shorts[4],
+        context->value->shorts[5]);
+}
+
+static void quick_player_objective_check(const struct ScriptLine* scline)
+{
+    ALLOCATE_SCRIPT_VALUE(scline->command, scline->np[1]);
+
+    int16_t idx = scline->np[0];
+    if ((idx < 0) || (idx >= QUICK_MESSAGES_COUNT))
+    {
+        SCRPTERRLOG("Invalid objective ID number (%d)", idx);
+        return;
+    }
+    const char* msgtext = scline->tp[2];
+
+    if (strlen(msgtext) >= MESSAGE_TEXT_LEN)
+    {
+        SCRPTWRNLOG("Objective TEXT too long; truncating to %d characters", MESSAGE_TEXT_LEN - 1);
+    }
+    if ((game.quick_messages[idx][0] != '\0') && (strcmp(game.quick_messages[idx], msgtext) != 0))
+    {
+        SCRPTWRNLOG("Quick Message no %d overwritten by different text", idx);
+    }
+    MapSubtlCoord x = 0, y = 0;
+    TbMapLocation location = 0;
+    const char* where = "ALL_PLAYERS";
+
+    snprintf(game.quick_messages[idx], MESSAGE_TEXT_LEN, "%s", msgtext);
+
+    if (scline->command == Cmd_QUICK_PLAYER_OBJECTIVE)
+    {
+        if (scline->tp[3][0] != '\0')
+        {
+            where = scline->tp[3];
+        }
+    }
+    else
+    {
+        x = scline->np[3];
+        y = scline->np[4];
+    }
+    if (!get_map_location_id(where, &location))
+    {
+        SCRPTERRLOG("Invalid location (%s)", scline->tp[3]);
+        return;
+    }
+
+    value->shorts[0] = idx;
+    value->ulongs[1] = location;
+    value->shorts[3] = x;
+    value->shorts[4] = y;
+    value->shorts[5] = -1;
+
+    const char *icon = (scline->command == Cmd_QUICK_PLAYER_OBJECTIVE)
+        ? scline->tp[4] : scline->tp[5];
+    if (icon[0] != '\0' && !get_custom_icon_from_value(icon, &value->shorts[5]))
+    {
+        SCRPTERRLOG("Invalid custom icon (%s)", icon);
+        DEALLOCATE_SCRIPT_VALUE
+        return;
+    }
+
+    PROCESS_SCRIPT_VALUE(scline->command);
+}
+
+static TbBool get_custom_icon_from_value(const char* txt, short* icon_idx)
+{
+    if (txt[0] == '\0')
+        return false;
+
+    short idx = get_icon_id(txt);
+    *icon_idx = idx;
+    return true;
+}
+
+static TbBool get_custom_ensign_from_value(const char* txt, short* ensign_id)
+{
+    if (txt[0] == '\0')
+        return false;   
+    if(strncmp(txt,"RESET",5) == 0 || strncmp(txt,"-1",2) == 0){
+        *ensign_id = -1;
+        return true;
+    }
+    short idx = get_ensign_id(txt);    
+    *ensign_id = CUSTOM_ENSIGN_BASE + idx;
+    return true;
+}
+
+static void quick_information_check(const struct ScriptLine* scline)
+{
+    ALLOCATE_SCRIPT_VALUE(scline->command, ALL_PLAYERS);
+
+    int16_t idx = scline->np[0];
+    if ((idx < 0) || (idx >= QUICK_MESSAGES_COUNT))
+    {
+        SCRPTERRLOG("Invalid information ID number (%d)", idx);
+        return;
+    }
+    const char* msgtext = scline->tp[1];
+
+    if (strlen(msgtext) >= MESSAGE_TEXT_LEN)
+    {
+        SCRPTWRNLOG("Information TEXT too long; truncating to %d characters", MESSAGE_TEXT_LEN - 1);
+    }
+    if ((game.quick_messages[idx][0] != '\0') && (strcmp(game.quick_messages[idx], msgtext) != 0))
+    {
+        SCRPTWRNLOG("Quick Message no %d overwritten by different text", idx);
+    }
+    MapSubtlCoord x = 0, y = 0;
+    TbMapLocation location = 0;
+    const char* where = "ALL_PLAYERS";
+
+    snprintf(game.quick_messages[idx], MESSAGE_TEXT_LEN, "%s", msgtext);
+
+    if (scline->command == Cmd_QUICK_INFORMATION)
+    {
+        if (scline->tp[2][0] != '\0')
+        {
+            where = scline->tp[2];
+        }
+    }
+    else
+    {
+        x = scline->np[2];
+        y = scline->np[3];
+    }
+    if (!get_map_location_id(where, &location))
+    {
+        SCRPTERRLOG("Invalid location (%s)", scline->tp[2]);
+        return;
+    }
+
+    value->shorts[0] = idx;
+    value->ulongs[1] = location;
+    value->shorts[3] = x;
+    value->shorts[4] = y;
+    value->shorts[5] = -1;
+    if (scline->command == Cmd_QUICK_INFORMATION)
+    {
+        if (scline->tp[3][0] != '\0' && !get_custom_icon_from_value(scline->tp[3], &value->shorts[5]))
+        {
+            SCRPTERRLOG("Invalid custom icon (%s)", scline->tp[3]);
+            DEALLOCATE_SCRIPT_VALUE
+            return;
+        }
+    }
+    PROCESS_SCRIPT_VALUE(scline->command);
+}
+
+static void quick_information_process(struct ScriptContext* context)
+{
+    set_quick_information_with_icon(context->value->shorts[0], context->player_idx, context->value->ulongs[1], context->value->shorts[3], context->value->shorts[4], context->value->shorts[5]);
+}
+
+static void quick_player_information_check(const struct ScriptLine* scline)
+{
+    ALLOCATE_SCRIPT_VALUE(scline->command, scline->np[1]);
+
+    int16_t idx = scline->np[0];
+    if ((idx < 0) || (idx >= QUICK_MESSAGES_COUNT))
+    {
+        SCRPTERRLOG("Invalid information ID number (%d)", idx);
+        return;
+    }
+    const char* msgtext = scline->tp[2];
+
+    if (strlen(msgtext) >= MESSAGE_TEXT_LEN)
+    {
+        SCRPTWRNLOG("Information TEXT too long; truncating to %d characters", MESSAGE_TEXT_LEN - 1);
+    }
+    if ((game.quick_messages[idx][0] != '\0') && (strcmp(game.quick_messages[idx], msgtext) != 0))
+    {
+        SCRPTWRNLOG("Quick Message no %d overwritten by different text", idx);
+    }
+    MapSubtlCoord x = 0, y = 0;
+    TbMapLocation location = 0;
+    const char* where = "ALL_PLAYERS";
+
+    snprintf(game.quick_messages[idx], MESSAGE_TEXT_LEN, "%s", msgtext);
+
+    if (scline->command == Cmd_QUICK_PLAYER_INFORMATION)
+    {
+        if (scline->tp[3][0] != '\0')
+        {
+            where = scline->tp[3];
+        }
+    }
+    else
+    {
+        x = scline->np[3];
+        y = scline->np[4];
+    }
+    if (!get_map_location_id(where, &location))
+    {
+        SCRPTERRLOG("Invalid location (%s)", scline->tp[3]);
+        return;
+    }
+
+    value->shorts[0] = idx;
+    value->ulongs[1] = location;
+    value->shorts[3] = x;
+    value->shorts[4] = y;
+    PROCESS_SCRIPT_VALUE(scline->command);
+}
+
+static void display_information_check(const struct ScriptLine* scline)
+{
+    ALLOCATE_SCRIPT_VALUE(scline->command, ALL_PLAYERS);
+
+    TextStringId  msg_num = get_string_id_by_alias(scline->tp[0]);
+    if ((msg_num < 0))
+    {
+        DEALLOCATE_SCRIPT_VALUE
+        SCRPTERRLOG("Invalid TEXT number");
+        return;
+    }
+
+    MapSubtlCoord x = 0,y = 0;
+    TbMapLocation location = 0;
+    const char* where = "ALL_PLAYERS";
+
+    
+    if (scline->command == Cmd_DISPLAY_INFORMATION)
+    {
+        if (scline->tp[1][0] != '\0')
+        {
+            where = scline->tp[1];
+        }
+    }
+    else
+    {
+        x = scline->np[1];
+        y = scline->np[2];
+    }
+    if (!get_map_location_id(where, &location))
+    {
+        SCRPTERRLOG("Invalid location (%s)", scline->tp[1]);
+        return;
+    }
+
+    value->shorts[0] = msg_num;
+    value->ulongs[1] = location;
+    value->shorts[3] = x;
+    value->shorts[4] = y;
+    value->shorts[5] = -1;
+    if (scline->tp[2][0] != '\0' && !get_custom_icon_from_value(scline->tp[2], &value->shorts[5]))
+    {
+        SCRPTERRLOG("Invalid custom icon (%s)", scline->tp[2]);
+        DEALLOCATE_SCRIPT_VALUE
+        return;
+    }
+    PROCESS_SCRIPT_VALUE(scline->command);
+}
+
+static void display_information_process(struct ScriptContext* context)
+{
+    set_general_information_with_icon(context->value->shorts[0], context->player_idx,
+        context->value->ulongs[1], context->value->shorts[3], context->value->shorts[4], context->value->shorts[5]);
+}
+
+static void display_player_information_check(const struct ScriptLine* scline)
+{
+    ALLOCATE_SCRIPT_VALUE(scline->command, scline->np[1]);
+
+    TextStringId msg_num = get_string_id_by_alias(scline->tp[0]);
+    if ((msg_num < 0))
+    {
+        DEALLOCATE_SCRIPT_VALUE
+        SCRPTERRLOG("Invalid TEXT number");
+        return;
+    }
+
+    MapSubtlCoord x = 0, y = 0;
+    TbMapLocation location = 0;
+    const char* where = "ALL_PLAYERS";
+
+
+    if (scline->command == Cmd_DISPLAY_PLAYER_INFORMATION)
+    {
+        if (scline->tp[2][0] != '\0')
+        {
+            where = scline->tp[2];
+        }
+    }
+    else
+    {
+        x = scline->np[2];
+        y = scline->np[3];
+    }
+    if (!get_map_location_id(where, &location))
+    {
+        SCRPTERRLOG("Invalid location (%s)", scline->tp[2]);
+        return;
+    }
+
+    value->shorts[0] = msg_num;
+    value->ulongs[1] = location;
+    value->shorts[3] = x;
+    value->shorts[4] = y;
+    value->shorts[5] = -1;
+    PROCESS_SCRIPT_VALUE(scline->command);
 }
 
 static void tag_map_rect_check(const struct ScriptLine* scline)
@@ -896,9 +1338,9 @@ static void tag_map_rect_check(const struct ScriptLine* scline)
         SCRPTWRNLOG("Ending Y slab '%d' (from %d+%d/2) is out of range, fixing it to '%d'.", end_y, y, height, game.map_tiles_y);
         end_y = game.map_tiles_y;
     }
-    if ((x < 0) || (x > game.map_tiles_y) || (y < 0) || (y > game.map_tiles_y))
+    if ((x < 0) || (x > game.map_tiles_x) || (y < 0) || (y > game.map_tiles_y))
     {
-        SCRPTERRLOG("Conceal slabs out of range, trying to set conceal center point to (%d,%d) on map that's %dx%d slabs", x, y, game.map_tiles_x, game.map_tiles_y);
+        SCRPTERRLOG("Tag slabs out of range, trying to set tag center point to (%d,%d) on map that's %dx%d slabs", x, y, game.map_tiles_x, game.map_tiles_y);
         DEALLOCATE_SCRIPT_VALUE
             return;
     }
@@ -1329,28 +1771,16 @@ static void count_creatures_at_action_point_check(const struct ScriptLine* sclin
     PROCESS_SCRIPT_VALUE(scline->command);
 }
 
+static void copy_creature_type_check(const struct ScriptLine* scline)
+{
+    script_copy_creature_type(scline->np[0],scline->tp[1]);
+    return;
+}
+
 static void new_creature_type_check(const struct ScriptLine* scline)
 {
-    if (game.conf.crtr_conf.model_count >= CREATURE_TYPES_MAX)
-    {
-        SCRPTERRLOG("Cannot increase creature type count for creature type '%s', already at maximum %d types.", scline->tp[0], CREATURE_TYPES_MAX);
-        return;
-    }
-
-    int i = game.conf.crtr_conf.model_count;
-    game.conf.crtr_conf.model_count++;
-    snprintf(game.conf.crtr_conf.model[i].name, COMMAND_WORD_LEN, "%s", scline->tp[0]);
-    creature_desc[i-1].name = game.conf.crtr_conf.model[i].name;
-    creature_desc[i-1].num = i;
-
-    if (load_default_creaturemodel_config(i, 0))
-    {
-        SCRPTLOG("Adding creature type %s and increasing creature types to %d", creature_code_name(i), game.conf.crtr_conf.model_count - 1);
-    }
-    else
-    {
-        SCRPTERRLOG("Failed to load config for creature '%s'(%d).", game.conf.crtr_conf.model[i].name,i);
-    }
+    script_new_creature_type(scline->tp[0]);
+    return;
 }
 
 static void new_room_type_check(const struct ScriptLine* scline)
@@ -1378,9 +1808,9 @@ static void new_room_type_check(const struct ScriptLine* scline)
     roomst->pointer_sprite_idx = 0;
     roomst->panel_tab_idx = 0;
     roomst->ambient_snd_smp_id = 0;
-    roomst->msg_needed = 0;
-    roomst->msg_too_small = 0;
-    roomst->msg_no_route = 0;
+    memset(&roomst->msg_needed, 0, sizeof(SpeechRef));
+    memset(&roomst->msg_too_small, 0, sizeof(SpeechRef));
+    memset(&roomst->msg_no_route, 0, sizeof(SpeechRef));
     roomst->roles = RoRoF_None;
     roomst->cost = 0;
     roomst->health = 0;
@@ -3225,15 +3655,72 @@ static void display_variable_check(const struct ScriptLine *scline)
 }
 
 static void display_variable_process(struct ScriptContext *context)
+{    	
+    for (int i = DISPLAY_VARIABLES_LIMIT - 1; i > 0; i--)
+    {
+        memcpy(&game.script_variables[i], &game.script_variables[i-1], sizeof(struct ScriptVariable));
+    }    
+    game.script_variables[0].variable_player = context->player_idx;
+    game.script_variables[0].value_type = context->value->bytes[2];
+    game.script_variables[0].value_id = context->value->longs[1];
+    game.script_variables[0].variable_target = context->value->longs[2];
+    game.script_variables[0].variable_target_type = context->value->bytes[1];    
+    game.script_variables[0].is_active = true;
+    
+    game.script_variables[0].include_icon = false;
+    game.script_variables[0].icon_idx = -1;
+    if (game.active_script_var_count < DISPLAY_VARIABLES_LIMIT) {
+        game.active_script_var_count++;
+    }	
+	
+    game.flags_gui |= GGUI_Variable;
+}
+static void display_variable_with_label_check(const struct ScriptLine *scline)
 {
-   game.script_variable_player = context->player_idx;
-   game.script_value_type = context->value->bytes[2];
-   game.script_value_id = context->value->longs[1];
-   game.script_variable_target = context->value->longs[2];
-   game.script_variable_target_type = context->value->bytes[1];
-   game.flags_gui |= GGUI_Variable;
+    int32_t varib_id, varib_type;
+    if (!parse_get_varib(scline->tp[1], &varib_id, &varib_type, level_file_version))
+    {
+        SCRPTERRLOG("Unknown variable, '%s'", scline->tp[1]);
+        return;
+    }
+    ALLOCATE_SCRIPT_VALUE(scline->command, scline->np[0]);
+
+    value->bytes[2] = varib_type;
+    value->longs[1] = varib_id;    
+    value->shorts[4] = -1;
+    const char *icon = scline->tp[2];
+    if (icon[0] != '\0'){        
+        value->shorts[4] = get_chat_icon_sprite_idx(icon);
+        if (value->shorts[4] == -1)
+        {
+            SCRPTERRLOG("Invalid custom icon (%s)", icon);
+            DEALLOCATE_SCRIPT_VALUE
+            return;
+        }
+    }
+
+    PROCESS_SCRIPT_VALUE(scline->command);
 }
 
+static void display_variable_with_label_process(struct ScriptContext *context)
+{    	
+    for (int i = DISPLAY_VARIABLES_LIMIT - 1; i > 0; i--)
+    {
+        memcpy(&game.script_variables[i], &game.script_variables[i-1], sizeof(struct ScriptVariable));
+    }    
+    
+    game.script_variables[0].variable_player = context->player_idx;
+    game.script_variables[0].value_type = context->value->bytes[2];
+    game.script_variables[0].value_id = context->value->longs[1];
+    game.script_variables[0].include_icon = true;
+    game.script_variables[0].is_active = true;
+    game.script_variables[0].icon_idx = context->value->shorts[4];
+    if (game.active_script_var_count < DISPLAY_VARIABLES_LIMIT) {
+        game.active_script_var_count++;
+    }	
+	
+    game.flags_gui |= GGUI_Variable;
+}
 static void display_countdown_check(const struct ScriptLine *scline)
 {
     if (scline->np[2] <= 0)
@@ -3266,9 +3753,79 @@ static void hide_timer_process(struct ScriptContext *context)
    game.flags_gui &= ~GGUI_ScriptTimer;
 }
 
+static void hide_variable_check(const struct ScriptLine *scline)
+{
+    int32_t varib_id = -1;
+    int32_t varib_type = -1;
+    int32_t player_idx = -1;
+
+    if (scline->tp[0][0] == '\0')
+    {
+        ALLOCATE_SCRIPT_VALUE(scline->command, scline->np[0]);
+
+        value->longs[0] = -1;  // All players
+        value->longs[1] = -1;  // All variables
+        value->bytes[2] = -1;
+
+        PROCESS_SCRIPT_VALUE(scline->command);
+        return;
+    }
+
+    player_idx = scline->np[0];
+
+    if (scline->tp[1][0] != '\0')
+    {
+        if (!parse_get_varib(scline->tp[1], &varib_id, &varib_type, level_file_version))
+        {
+            SCRPTERRLOG("Unknown variable, '%s'", scline->tp[1]);
+            return;
+        }
+    }
+
+    ALLOCATE_SCRIPT_VALUE(scline->command, scline->np[0]);
+
+    value->longs[0] = player_idx;
+    value->longs[1] = varib_id;
+    value->bytes[2] = varib_type;
+
+    PROCESS_SCRIPT_VALUE(scline->command);
+}
+
 static void hide_variable_process(struct ScriptContext *context)
 {
-   game.flags_gui &= ~GGUI_Variable;
+    short varib_id, varib_type, player_idx;
+    varib_type = context->value->bytes[2];
+    varib_id = context->value->longs[1];
+    player_idx = context->value->longs[0];
+    if(varib_id > -1 && varib_type > -1)
+    {
+        for (int i = 0; i < DISPLAY_VARIABLES_LIMIT; i++)
+        {
+            if(game.script_variables[i].value_id == varib_id && game.script_variables[i].value_type == varib_type && game.script_variables[i].variable_player == player_idx){
+                for (int j = i; j < game.active_script_var_count - 1; j++)
+                {
+                    game.script_variables[j] = game.script_variables[j+1];
+                }
+                game.active_script_var_count--;
+                break;
+            }
+        }        
+    } else {
+        for (int i = 0; i < game.active_script_var_count; i++)
+        {
+            if (game.script_variables[i].variable_player == player_idx || player_idx == -1)
+            {
+                for (int j = i; j < game.active_script_var_count - 1; j++)
+                {
+                    game.script_variables[j] = game.script_variables[j+1];
+                }
+                game.active_script_var_count--;
+                i--; 
+            }
+        }
+    }
+    if(game.active_script_var_count == 0)
+        game.flags_gui &= ~GGUI_Variable;
 }
 
 static void create_effect_check(const struct ScriptLine *scline)
@@ -3411,6 +3968,7 @@ static void set_box_tooltip_check(const struct ScriptLine* scline)
     {
         SCRPTERRLOG("Invalid CUSTOM_BOX number (%ld)", scline->np[0]);
         DEALLOCATE_SCRIPT_VALUE;
+        return;
     }
     value->shorts[0] = scline->np[0];
 
@@ -3445,8 +4003,15 @@ static void set_box_tooltip_id_check(const struct ScriptLine *scline)
         DEALLOCATE_SCRIPT_VALUE;
         return;
     }
+    TextStringId str_id = get_string_id_by_alias(scline->tp[1]);
+    if (str_id < 0)
+    {
+        SCRPTERRLOG("Unknown string '%s'", scline->tp[1]);
+        DEALLOCATE_SCRIPT_VALUE;
+        return;
+    }
     value->shorts[0] = scline->np[0];
-    value->shorts[1] = scline->np[1];
+    value->shorts[1] = str_id;
     PROCESS_SCRIPT_VALUE(scline->command);
 }
 
@@ -4369,10 +4934,10 @@ static void set_music_process(struct ScriptContext *context)
     }
     if (track == 0) {
         SCRPTLOG("Stopping music");
-        stop_music();
+        stop_music(true);
     } else if (track < 0) {
         const char * fname = script_strval(context->value->longs[1]);
-        play_music(prepare_file_fmtpath(FGrp_CmpgMedia, "%s", fname));
+        play_music_fgroup(FGrp_CmpgMedia, fname);
     } else {
         play_music_track(track);
     }
@@ -4487,16 +5052,16 @@ static void add_effectgen_to_level_check(const struct ScriptLine* scline)
         return;
     }
     value->shorts[0] = (short)gen_id;
-    value->shorts[1] = location;
-    value->shorts[2] = range * COORD_PER_STL;
+    value->ulongs[1] = location;
+    value->shorts[3] = range * COORD_PER_STL;
     PROCESS_SCRIPT_VALUE(scline->command);
 }
 
 static void add_effectgen_to_level_process(struct ScriptContext* context)
 {
     ThingModel gen_id = context->value->shorts[0];
-    short location = context->value->shorts[1];
-    short range = context->value->shorts[2];
+    TbMapLocation location = context->value->ulongs[1];
+    short range = context->value->shorts[3];
     if (get_script_current_condition() == CONDITION_ALWAYS)
     {
         script_process_new_effectgen(gen_id, location, range);
@@ -4556,7 +5121,7 @@ static void set_power_configuration_check(const struct ScriptLine *scline)
         DEALLOCATE_SCRIPT_VALUE
         return;
     }
-    long long number_value = 0;
+    int64_t number_value = 0;
     long k;
     switch (powervar)
     {
@@ -4593,7 +5158,8 @@ static void set_power_configuration_check(const struct ScriptLine *scline)
                 }
                 else
                 {
-                    char *flag = strtok(new_value," ");
+                    char *saveptr = NULL;
+                    char *flag = strtok_r(new_value," ",&saveptr);
                     while ( flag != NULL )
                     {
                         j = get_long_id(powermodel_castability_commands, flag);
@@ -4606,7 +5172,7 @@ static void set_power_configuration_check(const struct ScriptLine *scline)
                             DEALLOCATE_SCRIPT_VALUE
                             return;
                         }
-                        flag = strtok(NULL, " " );
+                        flag = strtok_r(NULL, " ", &saveptr);
                     }
                 }
                 value->chars[3] = -1;
@@ -4655,7 +5221,8 @@ static void set_power_configuration_check(const struct ScriptLine *scline)
                 }
                 else
                 {
-                    char *flag = strtok(new_value," ");
+                    char *saveptr = NULL;
+                    char *flag = strtok_r(new_value," ",&saveptr);
                     while ( flag != NULL )
                     {
                         k = get_id(powermodel_properties_commands, flag);
@@ -4668,7 +5235,7 @@ static void set_power_configuration_check(const struct ScriptLine *scline)
                             DEALLOCATE_SCRIPT_VALUE
                             return;
                         }
-                        flag = strtok(NULL, " " );
+                        flag = strtok_r(NULL, " ", &saveptr);
                     }
                 }
                 value->chars[3] = -1;
@@ -4790,15 +5357,15 @@ static void set_power_configuration_check(const struct ScriptLine *scline)
     {
         if ( (powervar == 5) && (value->chars[3] != -1) )
         {
-            SCRIPTDBG(7, "Toggling %s castability flag: %I64d", powername, number_value);
+            SCRIPTDBG(7, "Toggling %s castability flag: %" PRId64, powername, number_value);
         }
         else if ( (powervar == 14) && (value->chars[3] != -1) )
         {
-            SCRIPTDBG(7, "Toggling %s property flag: %I64d", powername, number_value);
+            SCRIPTDBG(7, "Toggling %s property flag: %" PRId64, powername, number_value);
         }
         else
         {
-            SCRIPTDBG(7, "Setting power %s property %s to %I64d", powername, property, number_value);
+            SCRIPTDBG(7, "Setting power %s property %s to %" PRId64, powername, property, number_value);
         }
     }
     #endif
@@ -4964,7 +5531,10 @@ static void set_player_colour_process(struct ScriptContext *context)
 
 static void set_game_rule_check(const struct ScriptLine* scline)
 {
-    char* rulevalue_str = strdup(scline->tp[1]);
+    char* rulevalue_str = malloc(MAX_TEXT_LENGTH);
+    if (rulevalue_str == NULL)
+        return;
+    snprintf(rulevalue_str, MAX_TEXT_LENGTH, "%s", scline->tp[1]);
     PlayerNumber plyr_idx;
     if (scline->tp[2][0] == '\0')
     {
@@ -5393,7 +5963,7 @@ static void set_creature_max_level_process(struct ScriptContext* context)
     }
 }
 
-static void reset_action_point_check(const struct ScriptLine* scline)
+static void reset_or_trigger_action_point_check(const struct ScriptLine* scline)
 {
     ALLOCATE_SCRIPT_VALUE(scline->command, 0);
     long apt_idx = action_point_number_to_index(scline->np[0]);
@@ -5439,26 +6009,35 @@ static void quick_message_check(const struct ScriptLine* scline)
     }
     snprintf(game.quick_messages[scline->np[0]], MESSAGE_TEXT_LEN, "%s", scline->tp[1]);
     value->longs[0]= scline->np[0];
-    get_chat_icon_from_value(scline->tp[2], &value->chars[4], &value->chars[5]);
+	get_chat_icon_from_value(scline->tp[2], &value->shorts[4], &value->chars[6]);    
     PROCESS_SCRIPT_VALUE(scline->command);
 }
 
 static void quick_message_process(struct ScriptContext* context)
 {
-    message_add_fmt(context->value->chars[5], context->value->chars[4], "%s", game.quick_messages[context->value->ulongs[0]]);
+	message_add_fmt(context->value->chars[6], context->value->shorts[4], "%s", game.quick_messages[context->value->ulongs[0]]); 
 }
 
 static void display_message_check(const struct ScriptLine* scline)
 {
     ALLOCATE_SCRIPT_VALUE(scline->command, 0);
-    value->ulongs[0] = scline->np[0];
-    get_chat_icon_from_value(scline->tp[1], &value->chars[4], &value->chars[5]);
+
+    TextStringId msg_num = get_string_id_by_alias(scline->tp[0]);
+    if (msg_num < 0)
+    {
+        SCRPTERRLOG("Unknown string '%s'", scline->tp[0]);
+        DEALLOCATE_SCRIPT_VALUE;
+        return;
+    }
+    value->ulongs[0] = msg_num;
+    get_chat_icon_from_value(scline->tp[1], &value->shorts[4], &value->chars[7]);
+
     PROCESS_SCRIPT_VALUE(scline->command);
 }
 
 static void display_message_process(struct ScriptContext* context)
-{
-    message_add_fmt(context->value->chars[5], context->value->chars[4], "%s", get_string(context->value->ulongs[0]));
+{    
+    message_add_fmt(context->value->chars[7], context->value->shorts[4], "%s", get_string(context->value->ulongs[0]));   
 }
 
 static void clear_message_check(const struct ScriptLine* scline)
@@ -5614,6 +6193,9 @@ static void computer_player_process(struct ScriptContext* context)
         }
         if (playertype == PT_Roaming)
         {
+            //kill the old computer first, in case he was already active.
+            script_support_setup_player_as_zombie_keeper(i);
+
             player = get_player(i);
             player->player_type = PT_Roaming;
             player->allocflags |= PlaF_Allocated;
@@ -6127,12 +6709,46 @@ static void set_next_level_check(const struct ScriptLine* scline)
     }
 
     value->shorts[1] = next_level;
+    if (is_bonus_level(game.loaded_level_number) || is_extra_level(game.loaded_level_number))
+    {
+        value->shorts[2] = true; // On bonus levels we have to force moving on.
+    }
     PROCESS_SCRIPT_VALUE(scline->command);
 }
 
 static void set_next_level_process(struct ScriptContext* context)
 {
+    TbBool force_now = context->value->shorts[2];
     intralvl.next_level = context->value->shorts[1];
+    if (force_now)
+    {
+        set_continue_level_number(intralvl.next_level);
+    }
+}
+
+static void set_level_ensign_check(const struct ScriptLine* scline)
+{
+    ALLOCATE_SCRIPT_VALUE(scline->command, 0);
+    short lvlnum = scline->np[0];
+    if (!is_campaign_level(lvlnum))
+    {
+        SCRPTERRLOG("Script command %s only functions in campaigns.", scline->tcmnd);
+        DEALLOCATE_SCRIPT_VALUE
+        return;
+    }
+    if (scline->tp[1][0] != '\0' && !get_custom_ensign_from_value(scline->tp[1], &value->shorts[2]))
+    {
+        SCRPTERRLOG("Invalid custom ensign (%s)", scline->tp[1]);
+        DEALLOCATE_SCRIPT_VALUE
+        return;
+    }
+    value->shorts[1] = lvlnum;
+    PROCESS_SCRIPT_VALUE(scline->command);
+}
+
+static void set_level_ensign_process(struct ScriptContext* context)
+{
+    set_level_ensign(context->value->shorts[1], context->value->shorts[2]);
 }
 
 static void show_bonus_level_check(const struct ScriptLine* scline)
@@ -6321,6 +6937,11 @@ static void tutorial_flash_button_process(struct ScriptContext* context)
     }
 }
 
+static void trigger_action_point_process(struct ScriptContext* context)
+{
+    action_point_trigger_idx(context->value->longs[0], context->value->chars[4]);
+}
+
 /**
  * Descriptions of script commands for parser.
  * Arguments are: A-string, N-integer, C-creature model, P-player, R-room kind, L-location, O-operator, S-slab kind, B-boolean
@@ -6354,13 +6975,30 @@ const struct CommandDesc command_desc[] = {
   {"MAX_CREATURES",                     "PN      ", Cmd_MAX_CREATURES, NULL, NULL},
   {"NEXT_COMMAND_REUSABLE",             "        ", Cmd_NEXT_COMMAND_REUSABLE, NULL, NULL},
   {"DOOR_AVAILABLE",                    "PANN    ", Cmd_DOOR_AVAILABLE, NULL, NULL},
-  {"DISPLAY_OBJECTIVE",                 "Nl      ", Cmd_DISPLAY_OBJECTIVE, &display_objective_check, &display_objective_process},
-  {"DISPLAY_OBJECTIVE_WITH_POS",        "NNN     ", Cmd_DISPLAY_OBJECTIVE_WITH_POS, &display_objective_check, &display_objective_process},
-  {"DISPLAY_INFORMATION",               "Nl      ", Cmd_DISPLAY_INFORMATION, NULL, NULL},
-  {"DISPLAY_INFORMATION_WITH_POS",      "NNN     ", Cmd_DISPLAY_INFORMATION_WITH_POS, NULL, NULL},
+  {"DISPLAY_OBJECTIVE",                 "Ala     ", Cmd_DISPLAY_OBJECTIVE, &display_objective_check, &display_objective_process},
+  {"DISPLAY_OBJECTIVE_WITH_POS",        "ANNa    ", Cmd_DISPLAY_OBJECTIVE_WITH_POS, &display_objective_check, &display_objective_process},
+  {"DISPLAY_INFORMATION",               "Ala     ", Cmd_DISPLAY_INFORMATION, &display_information_check, &display_information_process},
+  {"DISPLAY_INFORMATION_WITH_POS",      "ANN     ", Cmd_DISPLAY_INFORMATION_WITH_POS, &display_information_check, &display_information_process},
+  {"DISPLAY_PLAYER_OBJECTIVE",          "APla    ", Cmd_DISPLAY_PLAYER_OBJECTIVE, &display_player_objective_check, &display_objective_process},
+  {"DISPLAY_PLAYER_OBJECTIVE_WITH_POS", "APNNa   ", Cmd_DISPLAY_PLAYER_OBJECTIVE_WITH_POS, &display_player_objective_check, &display_objective_process},
+  {"DISPLAY_PLAYER_INFORMATION",        "APl     ", Cmd_DISPLAY_PLAYER_INFORMATION, &display_player_information_check, &display_information_process},
+  {"DISPLAY_PLAYER_INFORMATION_WITH_POS", "APNN    ", Cmd_DISPLAY_PLAYER_INFORMATION_WITH_POS, &display_player_information_check, &display_information_process},
+  {"QUICK_OBJECTIVE",                   "NAla    ", Cmd_QUICK_OBJECTIVE, &quick_objective_check, &quick_objective_process},
+  {"QUICK_OBJECTIVE_WITH_POS",          "NANNa   ", Cmd_QUICK_OBJECTIVE_WITH_POS, &quick_objective_check, &quick_objective_process},
+  {"QUICK_INFORMATION",                 "NAla    ", Cmd_QUICK_INFORMATION, &quick_information_check, &quick_information_process},
+  {"QUICK_INFORMATION_WITH_POS",        "NANN    ", Cmd_QUICK_INFORMATION_WITH_POS, &quick_information_check, &quick_information_process},
+  {"QUICK_PLAYER_OBJECTIVE",            "NPala   ", Cmd_QUICK_PLAYER_OBJECTIVE, &quick_player_objective_check, &quick_objective_process},
+  {"QUICK_PLAYER_OBJECTIVE_WITH_POS",   "NPANNa  ", Cmd_QUICK_PLAYER_OBJECTIVE_WITH_POS, &quick_player_objective_check, &quick_objective_process},
+  {"QUICK_PLAYER_INFORMATION",          "NPAl    ", Cmd_QUICK_PLAYER_INFORMATION, &quick_player_information_check, &quick_information_process},
+  {"QUICK_PLAYER_INFORMATION_WITH_POS", "NPANN   ", Cmd_QUICK_PLAYER_INFORMATION_WITH_POS, &quick_player_information_check, &quick_information_process},
+  {"DISPLAY_MESSAGE",                   "AA      ", Cmd_DISPLAY_MESSAGE, &display_message_check, &display_message_process},
+  {"QUICK_MESSAGE",                     "NAA     ", Cmd_QUICK_MESSAGE, &quick_message_check, &quick_message_process},
+  {"CLEAR_MESSAGE",                     "n       ", Cmd_CLEAR_MESSAGE, &clear_message_check, &clear_message_process},
+  {"HEART_LOST_OBJECTIVE",              "Nl      ", Cmd_HEART_LOST_OBJECTIVE, &heart_lost_objective_check, &heart_lost_objective_process},
+  {"HEART_LOST_QUICK_OBJECTIVE",        "NAl     ", Cmd_HEART_LOST_QUICK_OBJECTIVE, &heart_lost_quick_objective_check, &heart_lost_quick_objective_process},
   {"ADD_TUNNELLER_PARTY_TO_LEVEL",      "PAAANNN ", Cmd_ADD_TUNNELLER_PARTY_TO_LEVEL, NULL, NULL},
   {"ADD_CREATURE_TO_POOL",              "CN      ", Cmd_ADD_CREATURE_TO_POOL, NULL, NULL},
-  {"RESET_ACTION_POINT",                "Na      ", Cmd_RESET_ACTION_POINT, &reset_action_point_check, &reset_action_point_process},
+  {"RESET_ACTION_POINT",                "Na      ", Cmd_RESET_ACTION_POINT, &reset_or_trigger_action_point_check, &reset_action_point_process},
   {"SET_CREATURE_MAX_LEVEL",            "PC!N    ", Cmd_SET_CREATURE_MAX_LEVEL, &set_creature_max_level_check, &set_creature_max_level_process},
   {"SET_MUSIC",                         "A       ", Cmd_SET_MUSIC, &set_music_check, &set_music_process},
   {"TUTORIAL_FLASH_BUTTON",             "AN      ", Cmd_TUTORIAL_FLASH_BUTTON, &tutorial_flash_button_check, &tutorial_flash_button_process},
@@ -6380,10 +7018,6 @@ const struct CommandDesc command_desc[] = {
   {"ALLY_PLAYERS",                      "PPN     ", Cmd_ALLY_PLAYERS, NULL, NULL},
   {"DEAD_CREATURES_RETURN_TO_POOL",     "B       ", Cmd_DEAD_CREATURES_RETURN_TO_POOL, NULL, NULL},
   {"BONUS_LEVEL_TIME",                  "Nb      ", Cmd_BONUS_LEVEL_TIME, NULL, NULL},
-  {"QUICK_OBJECTIVE",                   "NAl     ", Cmd_QUICK_OBJECTIVE, NULL, NULL},
-  {"QUICK_INFORMATION",                 "NAl     ", Cmd_QUICK_INFORMATION, NULL, NULL},
-  {"QUICK_OBJECTIVE_WITH_POS",          "NANN    ", Cmd_QUICK_OBJECTIVE_WITH_POS, NULL, NULL},
-  {"QUICK_INFORMATION_WITH_POS",        "NANN    ", Cmd_QUICK_INFORMATION_WITH_POS, NULL, NULL},
   {"SWAP_CREATURE",                     "CC      ", Cmd_SWAP_CREATURE, &swap_creature_check, &swap_creature_process},
   {"PRINT",                             "A       ", Cmd_PRINT, NULL, NULL},
   {"MESSAGE",                           "A       ", Cmd_MESSAGE, NULL, NULL},
@@ -6420,6 +7054,7 @@ const struct CommandDesc command_desc[] = {
   {"SET_NEXT_LEVEL",                    "N       ", Cmd_SET_NEXT_LEVEL, &set_next_level_check, &set_next_level_process},
   {"SHOW_BONUS_LEVEL",                  "N       ", Cmd_SHOW_BONUS_LEVEL, &show_bonus_level_check, &show_bonus_level_process},
   {"HIDE_BONUS_LEVEL",                  "N       ", Cmd_HIDE_BONUS_LEVEL, &show_bonus_level_check, &hide_bonus_level_process},
+  {"SET_LEVEL_ENSIGN",                  "NA      ", Cmd_SET_LEVEL_ENSIGN, &set_level_ensign_check, &set_level_ensign_process},
   {"LEVEL_UP_CREATURE",                 "PC!AN   ", Cmd_LEVEL_UP_CREATURE, NULL, NULL},
   {"LEVEL_UP_PLAYERS_CREATURES",        "PC!n    ", Cmd_LEVEL_UP_PLAYERS_CREATURES, &level_up_players_creatures_check, level_up_players_creatures_process},
   {"CHANGE_CREATURE_OWNER",             "PC!AP   ", Cmd_CHANGE_CREATURE_OWNER, NULL, NULL},
@@ -6432,15 +7067,12 @@ const struct CommandDesc command_desc[] = {
   {"SET_SACRIFICE_RECIPE",              "AAA+    ", Cmd_SET_SACRIFICE_RECIPE, &set_sacrifice_recipe_check, &set_sacrifice_recipe_process},
   {"REMOVE_SACRIFICE_RECIPE",           "A+      ", Cmd_REMOVE_SACRIFICE_RECIPE, &remove_sacrifice_recipe_check, &set_sacrifice_recipe_process},
   {"SET_BOX_TOOLTIP",                   "NA      ", Cmd_SET_BOX_TOOLTIP, &set_box_tooltip_check, &set_box_tooltip_process},
-  {"SET_BOX_TOOLTIP_ID",                "NN      ", Cmd_SET_BOX_TOOLTIP_ID, &set_box_tooltip_id_check, &set_box_tooltip_id_process},
+  {"SET_BOX_TOOLTIP_ID",                "NA      ", Cmd_SET_BOX_TOOLTIP_ID, &set_box_tooltip_id_check, &set_box_tooltip_id_process},
   {"CHANGE_SLAB_OWNER",                 "NNPa    ", Cmd_CHANGE_SLAB_OWNER, &change_slab_owner_check, &change_slab_owner_process},
   {"CHANGE_SLAB_TYPE",                  "NNSa    ", Cmd_CHANGE_SLAB_TYPE, &change_slab_type_check, &change_slab_type_process},
   {"CREATE_EFFECTS_LINE",               "LLNNNA  ", Cmd_CREATE_EFFECTS_LINE, &create_effects_line_check, &create_effects_line_process},
   {"IF_SLAB_OWNER",                     "NNP     ", Cmd_IF_SLAB_OWNER, NULL, NULL},
   {"IF_SLAB_TYPE",                      "NNS     ", Cmd_IF_SLAB_TYPE, NULL, NULL},
-  {"QUICK_MESSAGE",                     "NAA     ", Cmd_QUICK_MESSAGE, &quick_message_check, &quick_message_process},
-  {"DISPLAY_MESSAGE",                   "NA      ", Cmd_DISPLAY_MESSAGE, &display_message_check, &display_message_process},
-  {"CLEAR_MESSAGE",                     "n       ", Cmd_CLEAR_MESSAGE, &clear_message_check, &clear_message_process},
   {"USE_SPELL_ON_CREATURE",             "PC!AAn  ", Cmd_USE_SPELL_ON_CREATURE, &use_spell_on_creature_check, &use_spell_on_creature_process},
   {"USE_SPELL_ON_PLAYERS_CREATURES",    "PC!An   ", Cmd_USE_SPELL_ON_PLAYERS_CREATURES, &use_spell_on_players_creatures_check, &use_spell_on_players_creatures_process},
   {"SET_HEART_HEALTH",                  "PN      ", Cmd_SET_HEART_HEALTH, &set_heart_health_check, &set_heart_health_process},
@@ -6453,13 +7085,12 @@ const struct CommandDesc command_desc[] = {
   {"ADD_TO_TIMER",                      "PAN     ", Cmd_ADD_TO_TIMER, &add_to_timer_check, &add_to_timer_process},
   {"ADD_BONUS_TIME",                    "N       ", Cmd_ADD_BONUS_TIME, &add_bonus_time_check, &add_bonus_time_process},
   {"DISPLAY_VARIABLE",                  "PAnn    ", Cmd_DISPLAY_VARIABLE, &display_variable_check, &display_variable_process},
+  {"DISPLAY_VARIABLE_WITH_LABEL",       "PAa    ", Cmd_DISPLAY_VARIABLE_WITH_LABEL, &display_variable_with_label_check, &display_variable_with_label_process},
   {"DISPLAY_COUNTDOWN",                 "PANb    ", Cmd_DISPLAY_COUNTDOWN, &display_countdown_check, &display_timer_process},
   {"HIDE_TIMER",                        "        ", Cmd_HIDE_TIMER, &cmd_no_param_check, &hide_timer_process},
-  {"HIDE_VARIABLE",                     "        ", Cmd_HIDE_VARIABLE, &cmd_no_param_check, &hide_variable_process},
+  {"HIDE_VARIABLE",                     "pa      ", Cmd_HIDE_VARIABLE, &hide_variable_check, &hide_variable_process},
   {"CREATE_EFFECT",                     "AAn     ", Cmd_CREATE_EFFECT, &create_effect_check, &create_effect_process},
   {"CREATE_EFFECT_AT_POS",              "ANNn    ", Cmd_CREATE_EFFECT_AT_POS, &create_effect_at_pos_check, &create_effect_at_pos_process},
-  {"HEART_LOST_QUICK_OBJECTIVE",        "NAl     ", Cmd_HEART_LOST_QUICK_OBJECTIVE, &heart_lost_quick_objective_check, &heart_lost_quick_objective_process},
-  {"HEART_LOST_OBJECTIVE",              "Nl      ", Cmd_HEART_LOST_OBJECTIVE, &heart_lost_objective_check, &heart_lost_objective_process},
   {"SET_DOOR",                          "ANN     ", Cmd_SET_DOOR, &set_door_check, &set_door_process},
   {"PLACE_DOOR",                        "PANNb!b!", Cmd_PLACE_DOOR, &place_door_check, &place_door_process},
   {"PLACE_TRAP",                        "PANNb!  ", Cmd_PLACE_TRAP, &place_trap_check, &place_trap_process },
@@ -6475,6 +7106,7 @@ const struct CommandDesc command_desc[] = {
   {"NEW_OBJECT_TYPE",                   "A       ", Cmd_NEW_OBJECT_TYPE, &new_object_type_check, &null_process},
   {"NEW_ROOM_TYPE",                     "A       ", Cmd_NEW_ROOM_TYPE, &new_room_type_check, &null_process},
   {"NEW_CREATURE_TYPE",                 "A       ", Cmd_NEW_CREATURE_TYPE, &new_creature_type_check, &null_process},
+  {"COPY_CREATURE_TYPE",                "CA      ", Cmd_COPY_CREATURE_TYPE, &copy_creature_type_check, &null_process },
   {"SET_HAND_GRAPHIC",                  "PA      ", Cmd_SET_HAND_GRAPHIC, &set_power_hand_check, &set_power_hand_process},
   {"ADD_EFFECT_GENERATOR_TO_LEVEL",     "AAN     ", Cmd_ADD_EFFECT_GENERATOR_TO_LEVEL, &add_effectgen_to_level_check, &add_effectgen_to_level_process},
   {"SET_EFFECT_GENERATOR_CONFIGURATION","AAAnn   ", Cmd_SET_EFFECT_GENERATOR_CONFIGURATION, &set_effectgen_configuration_check, &set_effectgen_configuration_process},
@@ -6490,6 +7122,7 @@ const struct CommandDesc command_desc[] = {
   {"LOCK_POSSESSION",                   "PB!     ", Cmd_LOCK_POSSESSION, &lock_possession_check, &lock_possession_process},
   {"SET_DIGGER",                        "PC      ", Cmd_SET_DIGGER , &set_digger_check, &set_digger_process},
   {"RUN_LUA_CODE",                      "A       ", Cmd_RUN_LUA_CODE , &run_lua_code_check, &run_lua_code_process},
+  {"TRIGGER_ACTION_POINT",              "Na      ", Cmd_TRIGGER_ACTION_POINT, &reset_or_trigger_action_point_check, &trigger_action_point_process},
   {NULL,                                "        ", Cmd_NONE, NULL, NULL},
 };
 
@@ -6518,13 +7151,13 @@ const struct CommandDesc dk1_command_desc[] = {
   {"MAX_CREATURES",                "PN      ", Cmd_MAX_CREATURES, NULL, NULL},
   {"NEXT_COMMAND_REUSABLE",        "        ", Cmd_NEXT_COMMAND_REUSABLE, NULL, NULL},
   {"DOOR_AVAILABLE",               "PANN    ", Cmd_DOOR_AVAILABLE, NULL, NULL},
-  {"DISPLAY_OBJECTIVE",            "NA      ", Cmd_DISPLAY_OBJECTIVE, &display_objective_check, &display_objective_process},
-  {"DISPLAY_OBJECTIVE_WITH_POS",   "NNN     ", Cmd_DISPLAY_OBJECTIVE_WITH_POS, &display_objective_check, &display_objective_process},
-  {"DISPLAY_INFORMATION",          "N       ", Cmd_DISPLAY_INFORMATION, NULL, NULL},
-  {"DISPLAY_INFORMATION_WITH_POS", "NNN     ", Cmd_DISPLAY_INFORMATION_WITH_POS, NULL, NULL},
+  {"DISPLAY_OBJECTIVE",            "AA      ", Cmd_DISPLAY_OBJECTIVE, &display_objective_check, &display_objective_process},
+  {"DISPLAY_OBJECTIVE_WITH_POS",   "ANN     ", Cmd_DISPLAY_OBJECTIVE_WITH_POS, &display_objective_check, &display_objective_process},
+  {"DISPLAY_INFORMATION",          "A       ", Cmd_DISPLAY_INFORMATION, &display_information_check, &display_information_process},
+  {"DISPLAY_INFORMATION_WITH_POS", "ANN     ", Cmd_DISPLAY_INFORMATION_WITH_POS, &display_information_check, &display_information_process},
   {"ADD_TUNNELLER_PARTY_TO_LEVEL", "PAAANNN ", Cmd_ADD_TUNNELLER_PARTY_TO_LEVEL, NULL, NULL},
   {"ADD_CREATURE_TO_POOL",         "CN      ", Cmd_ADD_CREATURE_TO_POOL, NULL, NULL},
-  {"RESET_ACTION_POINT",           "N       ", Cmd_RESET_ACTION_POINT, &reset_action_point_check, &reset_action_point_process},
+  {"RESET_ACTION_POINT",           "N       ", Cmd_RESET_ACTION_POINT, &reset_or_trigger_action_point_check, &reset_action_point_process},
   {"SET_CREATURE_MAX_LEVEL",       "PC!N    ", Cmd_SET_CREATURE_MAX_LEVEL, &set_creature_max_level_check, &set_creature_max_level_process},
   {"SET_MUSIC",                    "N       ", Cmd_SET_MUSIC, NULL, NULL},
   {"TUTORIAL_FLASH_BUTTON",        "NN      ", Cmd_TUTORIAL_FLASH_BUTTON, &tutorial_flash_button_check, &tutorial_flash_button_process},
@@ -6540,8 +7173,8 @@ const struct CommandDesc dk1_command_desc[] = {
   {"ALLY_PLAYERS",                 "PP      ", Cmd_ALLY_PLAYERS, NULL, NULL},
   {"DEAD_CREATURES_RETURN_TO_POOL","N       ", Cmd_DEAD_CREATURES_RETURN_TO_POOL, NULL, NULL},
   {"BONUS_LEVEL_TIME",             "N       ", Cmd_BONUS_LEVEL_TIME, NULL, NULL},
-  {"QUICK_OBJECTIVE",              "NAA     ", Cmd_QUICK_OBJECTIVE, NULL, NULL},
-  {"QUICK_INFORMATION",            "NA      ", Cmd_QUICK_INFORMATION, NULL, NULL},
+  {"QUICK_OBJECTIVE",              "NAA     ", Cmd_QUICK_OBJECTIVE, &quick_objective_check, &quick_objective_process},
+  {"QUICK_INFORMATION",            "NA      ", Cmd_QUICK_INFORMATION, &quick_information_check, &quick_information_process},
   {"SWAP_CREATURE",                "CC      ", Cmd_SWAP_CREATURE, &swap_creature_check, &swap_creature_process},
   {"PRINT",                        "A       ", Cmd_PRINT, NULL, NULL},
   {"MESSAGE",                      "A       ", Cmd_MESSAGE, NULL, NULL},

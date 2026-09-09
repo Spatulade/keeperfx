@@ -42,7 +42,6 @@
 #include "thing_effects.h"
 #include "map_blocks.h"
 #include "map_utils.h"
-#include "ariadne_wallhug.h"
 #include "config_terrain.h"
 #include "config_effects.h"
 #include "creature_states.h"
@@ -51,6 +50,7 @@
 #include "magic_powers.h"
 #include "room_util.h"
 #include "game_legacy.h"
+#include "config_sounds.h"
 #include "frontmenu_ingame_map.h"
 #include "keeperfx.hpp"
 #include "config_spritecolors.h"
@@ -1545,7 +1545,7 @@ TbBool find_random_valid_position_for_thing_in_room(struct Thing *thing, struct 
             MapSubtlCoord stl_x = slab_subtile(slb_x, ssub % 3);
             MapSubtlCoord stl_y = slab_subtile(slb_y, ssub / 3);
             struct Map* mapblk = get_map_block_at(stl_x, stl_y);
-            if (((mapblk->flags & SlbAtFlg_Blocking) == 0) && (get_navigation_map_floor_height(stl_x,stl_y) < 4))
+            if (((mapblk->flags & SlbAtFlg_Blocking) == 0) && (get_floor_filled_subtiles_at(stl_x,stl_y) < 4))
             {
                 if (!terrain_toxic_for_creature_at_position(thing, stl_x, stl_y) && !subtile_has_sacrificial_on_top(stl_x, stl_y))
                 {
@@ -1651,7 +1651,7 @@ TbBool find_random_position_at_area_of_room(struct Coord3d *pos, const struct Ro
                 pos->z.val = subtile_coord(1,0);
                 struct Map* mapblk = get_map_block_at(pos->x.stl.num, pos->y.stl.num);
                 if (((mapblk->flags & SlbAtFlg_Blocking) == 0) && ((mapblk->flags & SlbAtFlg_IsDoor) == 0)
-                    && (get_navigation_map_floor_height(pos->x.stl.num, pos->y.stl.num) < 4)) {
+                    && (get_floor_filled_subtiles_at(pos->x.stl.num, pos->y.stl.num) < 4)) {
                     return true;
                 }
             }
@@ -1918,7 +1918,7 @@ TbBool find_first_valid_position_for_thing_anywhere_in_room(const struct Thing *
                 MapSubtlCoord stl_y = 3 * slb_y + dy;
                 struct Map* mapblk = get_map_block_at(stl_x, stl_y);
                 // Check if the position isn't filled with solid block
-                if (((mapblk->flags & SlbAtFlg_Blocking) == 0) && (get_navigation_map_floor_height(stl_x,stl_y) < 4))
+                if (((mapblk->flags & SlbAtFlg_Blocking) == 0) && (get_floor_filled_subtiles_at(stl_x,stl_y) < 4))
                 {
                     if (!terrain_toxic_for_creature_at_position(thing, stl_x, stl_y) && !subtile_has_sacrificial_on_top(stl_x, stl_y))
                     {
@@ -2160,7 +2160,7 @@ TbBool creature_can_get_to_any_of_players_rooms(struct Thing *thing, PlayerNumbe
 {
     for (RoomKind rkind = 1; rkind < game.conf.slab_conf.room_types_count; rkind++)
     {
-        struct Room* room = find_room_of_kind_creature_can_navigate_to(thing, owner, rkind, NavRtF_NoOwner);
+        struct Room* room = find_room_of_kind_creature_can_navigate_to(thing, owner, rkind, NavRtF_Default);
         if (!room_is_invalid(room))
             return true;
     }
@@ -3238,22 +3238,15 @@ void reset_creatures_rooms(struct Room *room)
 
 void replace_room_slab(struct Room *room, MapSlabCoord slb_x, MapSlabCoord slb_y, unsigned char owner, unsigned char is_destroyed)
 {
-    if (room_role_matches(room->kind,RoRoF_PassWater|RoRoF_PassLava))
+    if (room_role_matches(room->kind,RoRoF_PassWater|RoRoF_PassLava|RoRoF_PassAbyss))
     {
         struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
-        switch (slabmap_wlb(slb))
-        {
-        case 1:
-            place_slab_type_on_map(SlbT_LAVA,  slab_subtile(slb_x,0), slab_subtile(slb_y,0), game.neutral_player_num, 0);
-            break;
-        case 2:
-            place_slab_type_on_map(SlbT_WATER, slab_subtile(slb_x,0), slab_subtile(slb_y,0), game.neutral_player_num, 0);
-            break;
-        default:
+        int slbkind = slab_kind_from_wlb_type(slabmap_wlb(slb));
+        if (slbkind < 0) {
             ERRORLOG("WLB flags seem damaged for slab (%ld,%ld).",(long)slb_x,(long)slb_y);
-            place_slab_type_on_map(SlbT_PATH,  slab_subtile(slb_x,0), slab_subtile(slb_y,0), game.neutral_player_num, 0);
-            break;
+            slbkind = SlbT_PATH;
         }
+        place_slab_type_on_map(slbkind, slab_subtile(slb_x,0), slab_subtile(slb_y,0), game.neutral_player_num, 0);
     } else
     {
         if ( is_destroyed )
@@ -3269,7 +3262,7 @@ void replace_room_slab(struct Room *room, MapSlabCoord slb_x, MapSlabCoord slb_y
 
 struct Room *place_room(PlayerNumber owner, RoomKind rkind, MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
-    game.map_changed_for_nagivation = 1;
+    game.map_changed_for_navigation = 1;
     if (subtile_coords_invalid(stl_x, stl_y))
         return INVALID_ROOM;
     long slb_x = subtile_slab(stl_x);
@@ -3298,10 +3291,6 @@ struct Room *place_room(PlayerNumber owner, RoomKind rkind, MapSubtlCoord stl_x,
     if (rkind == RoK_BRIDGE) //todo Make configurable
     {
         place_animating_slab_type_on_map(roomst->assigned_slab, subtile_has_lava_on_top(stl_x, stl_y), stl_x, stl_y, owner);
-    }
-    else if (rkind == RoK_GUARDPOST)
-    {
-        place_animating_slab_type_on_map(roomst->assigned_slab, 0, stl_x, stl_y, owner);
     } else
     {
         place_slab_type_on_map(roomst->assigned_slab, stl_x, stl_y, owner, 0);
@@ -3554,7 +3543,7 @@ static void change_ownership_or_delete_object_thing_in_room(struct Room *room, s
         destroy_object(thing);
         return;
     }
-    if ((game.conf.rules[room->owner].game.classic_bugs_flags & ClscBug_ClaimRoomAllThings) != 0) {
+    if ((game.conf.rules[room->owner].gameplay.classic_bugs_flags & ClscBug_ClaimRoomAllThings) != 0) {
         // Preserve classic bug - object is claimed with the room
         thing->owner = newowner;
         return;
@@ -3844,7 +3833,7 @@ long claim_room(struct Room *room, struct Thing *claimtng)
     event_create_event(subtile_coord_center(room->central_stl_x), subtile_coord_center(room->central_stl_y),
         EvKind_RoomTakenOver, claimtng->owner, room->kind);
     do_room_integration(room);
-    thing_play_sample(claimtng, 116, NORMAL_PITCH, 0, 3, 0, 4, FULL_LOUDNESS);
+    thing_play_sample(claimtng, snd_room_claim, NORMAL_PITCH, 0, 3, 0, 4, FULL_LOUDNESS);
     output_room_takeover_message(room, oldowner, claimtng->owner);
     return 1;
 }

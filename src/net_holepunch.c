@@ -27,7 +27,7 @@
 #include "net_holepunch.h"
 #include "bflib_basics.h"
 
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <enet6/enet.h>
 #include <stdint.h>
 #include <string.h>
@@ -98,10 +98,10 @@ uint16_t holepunch_stun_query(ENetHost *host, char *output_ip, size_t output_ip_
         send_socket = fallback_socket;
     }
 
-    Uint32 timeout_deadline = SDL_GetTicks() + STUN_TIMEOUT_MS;
+    Uint32 timeout_deadline = (Uint32)SDL_GetTicks() + STUN_TIMEOUT_MS;
     uint16_t external_port_result = 0;
     for (;;) {
-        Uint32 now = SDL_GetTicks();
+        Uint32 now = (Uint32)SDL_GetTicks();
         if (now >= timeout_deadline)
             break;
         enet_uint32 socket_wait_flags = ENET_SOCKET_WAIT_RECEIVE;
@@ -170,6 +170,40 @@ static int send_and_burst(ENetSocket socket_handle, const ENetAddress *address, 
     return 1;
 }
 
+int holepunch_receive(ENetHost *host, ENetAddress *expected, size_t expected_count)
+{
+    static const uint8_t punch_payload[HOLE_PUNCH_PAYLOAD_SIZE] = {0};
+    uint8_t payload[HOLE_PUNCH_PAYLOAD_SIZE + 1];
+    int found = 0;
+    for (size_t packet = 0; packet < expected_count * HOLE_PUNCH_COUNT; packet++) {
+        int peeked = recv(host->socket, (char *)payload, sizeof(payload), MSG_PEEK);
+        if (peeked != HOLE_PUNCH_PAYLOAD_SIZE || memcmp(payload, punch_payload, HOLE_PUNCH_PAYLOAD_SIZE) != 0)
+            return found;
+        ENetBuffer receive_buffer = {.data = payload, .dataLength = sizeof(payload)};
+        ENetAddress source;
+        int received = enet_socket_receive(host->socket, &source, &receive_buffer, 1);
+        if (received != HOLE_PUNCH_PAYLOAD_SIZE)
+            return found;
+        for (size_t i = 0; i < expected_count; i++) {
+            ENetAddress comparable = expected[i];
+            comparable.port = source.port;
+            if (source.type == ENET_ADDRESS_TYPE_IPV6)
+                enet_address_convert_ipv6(&comparable);
+            if (!expected[i].port || !enet_address_equal_host(&source, &comparable))
+                continue;
+            if (source.port != expected[i].port) {
+                LbNetLog("Holepunch: learned peer port %d (advertised %d)\n", (int)source.port, (int)expected[i].port);
+                found = 2;
+            } else if (!found) {
+                found = 1;
+            }
+            expected[i] = source;
+            break;
+        }
+    }
+    return found;
+}
+
 void holepunch_punch_to(ENetHost *host, const ENetAddress *target)
 {
     static const uint8_t punch_payload[HOLE_PUNCH_PAYLOAD_SIZE] = {0};
@@ -183,8 +217,8 @@ void holepunch_punch_to(ENetHost *host, const ENetAddress *target)
         if (send_and_burst(host->socket, &mapped_target, &send_buffer))
             return;
     }
-    Uint32 current_time = SDL_GetTicks();
-    if (last_failure_log_time == 0 || SDL_TICKS_PASSED(current_time, last_failure_log_time + HOLE_PUNCH_LOG_INTERVAL_MS)) {
+    Uint32 current_time = (Uint32)SDL_GetTicks();
+    if (last_failure_log_time == 0 || (Sint32)((last_failure_log_time + HOLE_PUNCH_LOG_INTERVAL_MS) - current_time) <= 0) {
         last_failure_log_time = current_time;
         LbNetLog("Holepunch: send failed\n");
     }

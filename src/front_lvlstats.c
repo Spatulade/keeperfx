@@ -17,6 +17,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include "kfx/renderer/RendererManager.h"
 #include "front_lvlstats.h"
 #include "globals.h"
 #include "bflib_basics.h"
@@ -44,6 +45,7 @@
 #include "game_legacy.h"
 #include "sprites.h"
 #include "custom_sprites.h"
+#include "timer.h"
 
 #include "keeperfx.hpp"
 #include "post_inc.h"
@@ -239,9 +241,9 @@ void frontstats_draw_main_stats(struct GuiButton *gbtn)
             border = spr->SWidth * fs_units_per_px / 16;
         }
         LbTextSetWindow(pos_x + border, pos_y, gbtn->width - 2 * border, ln_height);
-        lbDisplay.DrawFlags = Lb_TEXT_HALIGN_LEFT;
+        RendererSetDrawFlags(Lb_TEXT_HALIGN_LEFT);
         LbTextDrawResized(0, 0, tx_units_per_px, get_string(stat->name_stridx));
-        lbDisplay.DrawFlags = Lb_TEXT_HALIGN_RIGHT;
+        RendererSetDrawFlags(Lb_TEXT_HALIGN_RIGHT);
         int stat_val;
         if (stat->get_value != NULL)
         {
@@ -251,7 +253,7 @@ void frontstats_draw_main_stats(struct GuiButton *gbtn)
         {
             stat_val = -1;
         }
-        if ( (timer_enabled()) && (stat->name_stridx == STRINGS_MAX+746) && (!TimerGame) )
+        if ( (timer_enabled()) && (stat->name_stridx == GUIStr_Time) && (!TimerGame) )
         {
             LbTextDrawResizedFmt(0, 0, tx_units_per_px, "%02ld:%02ld:%02ld:%03ld", Timer.Hours, Timer.Minutes, Timer.Seconds, Timer.MSeconds);
         }
@@ -280,9 +282,9 @@ void frontstats_draw_scrolling_stats(struct GuiButton *gbtn)
     int pos_y = -scrolling_offset * tx_units_per_px / 16;
     for (struct StatsData* stat = &scrolling_stats_data[scrolling_index]; pos_y < gbtn->height; pos_y += ln_height + 4 * units_per_pixel / 16)
     {
-        lbDisplay.DrawFlags = Lb_TEXT_HALIGN_LEFT;
+        RendererSetDrawFlags(Lb_TEXT_HALIGN_LEFT);
         LbTextDrawResized(pos_x, pos_y, tx_units_per_px, get_string(stat->name_stridx));
-        lbDisplay.DrawFlags = Lb_TEXT_HALIGN_RIGHT;
+        RendererSetDrawFlags(Lb_TEXT_HALIGN_RIGHT);
         int stat_val;
         if (stat->get_value != NULL)
         {
@@ -329,7 +331,7 @@ void frontstats_set_timer(void)
 
 void frontstats_update(void)
 {
-    scrolling_offset++;
+    scrolling_offset += game.delta_time;
     LbTextSetFont(frontend_font[1]);
     int h = LbTextLineHeight();
     if (h+4 < scrolling_offset)

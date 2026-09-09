@@ -201,7 +201,7 @@ unsigned short find_column_height(struct Column *col)
  * Returns height of a floor, in map coordinates.
  * @param mapblk The map block for which floor height should be returned.
  */
-long get_map_floor_height(const struct Map *mapblk)
+MapCoord get_map_floor_height(const struct Map *mapblk)
 {
     const struct Column *colmn;
     long i;
@@ -220,21 +220,21 @@ long get_map_floor_height(const struct Map *mapblk)
  * Returns height of a floor, in map coordinates.
  * @param pos The coordinates of a block for which floor height should be returned.
  */
-long get_floor_height_at(const struct Coord3d *pos)
+MapCoord get_floor_height_at(const struct Coord3d *pos)
 {
     struct Map *mapblk;
     mapblk = get_map_block_at(pos->x.val >> 8, pos->y.val >> 8);
     return get_map_floor_height(mapblk);
 }
 
-long get_floor_height(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
+MapCoord get_floor_height(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
     struct Map *mapblk;
     mapblk = get_map_block_at(stl_x, stl_y);
     return get_map_floor_height(mapblk);
 }
 
-long get_map_ceiling_height(const struct Map *mapblk)
+MapCoord get_map_ceiling_height(const struct Map *mapblk)
 {
     const struct Column *colmn;
     long i;
@@ -249,14 +249,14 @@ long get_map_ceiling_height(const struct Map *mapblk)
     return cubes_height << 8;
 }
 
-long get_ceiling_height_at(const struct Coord3d *pos)
+MapCoord get_ceiling_height_at(const struct Coord3d *pos)
 {
     struct Map *mapblk;
     mapblk = get_map_block_at(pos->x.val >> 8, pos->y.val >> 8);
     return get_map_ceiling_height(mapblk);
 }
 
-long get_ceiling_height_at_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
+MapCoord get_ceiling_height_at_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
     struct Map *mapblk;
     mapblk = get_map_block_at(stl_x, stl_y);
@@ -475,6 +475,15 @@ void init_top_texture_to_cube_table(void)
     }
 }
 
+TbBool subtile_is_unsafe(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
+{
+    long tcube;
+    int32_t cube_pos;
+    tcube = get_top_cube_at(stl_x, stl_y, &cube_pos);
+
+    return cube_is_lava(tcube) || (cube_pos<4 && cube_is_sacrificial(tcube));
+}
+
 /* Returns if given cube is lava.
  * @param cube_id
  * @return */
@@ -491,6 +500,12 @@ TbBool cube_is_water(long cube_id)
 {
     struct CubeConfigStats *cubest = get_cube_model_stats(cube_id);
     return flag_is_set(cubest->properties_flags, CPF_IsWater);
+}
+
+TbBool cube_is_abyss(long cube_id)
+{
+    struct CubeConfigStats *cubest = get_cube_model_stats(cube_id);
+    return flag_is_set(cubest->properties_flags, CPF_IsAbyss);
 }
 
 /* Returns if given cube is a sacrificial ground or magic door surface.
@@ -535,6 +550,13 @@ TbBool subtile_has_water_on_top(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
     long i;
     i = get_top_cube_at(stl_x, stl_y, NULL);
     return cube_is_water(i);
+}
+
+TbBool subtile_has_abyss_on_top(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
+{
+    long i;
+    i = get_top_cube_at(stl_x, stl_y, NULL);
+    return cube_is_abyss(i);
 }
 
 /**

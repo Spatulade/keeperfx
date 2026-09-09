@@ -54,6 +54,12 @@ enum LandMarkings {
     LndMk_PINPOINTS,
 };
 
+enum CampaignTypes {
+    CampgnT_Default,
+    CampgnT_Campaign,
+    CampgnT_Mappack,
+    CampgnT_MultiplayerMappack,
+};
 
 /******************************************************************************/
 struct CreditsItem {
@@ -107,6 +113,7 @@ struct GameCampaign {
   char *credits_data;
   struct CreditsItem credits[CAMPAIGN_CREDITS_COUNT];
   // Campaign strings
+  unsigned char strings_lang;
   char strings_fname[DISKPATH_SIZE];
   char strings_fname_eng[DISKPATH_SIZE];
   char *strings_data_list[MOD_ITEM_MAX*MOD_ITEM_TYPE_CNT+1];
@@ -147,7 +154,7 @@ struct LevelInformation {
   unsigned short state;
   unsigned short location;
   int mapsize_x;
-  int mapsize_y;
+  int mapsize_y;  
 };
 
 struct CampaignsList {
@@ -160,6 +167,7 @@ struct CampaignsList {
 extern struct GameCampaign campaign;
 extern struct CampaignsList campaigns_list;
 extern struct CampaignsList mappacks_list;
+extern struct CampaignsList mp_mappacks_list;
 extern const struct NamedCommand cmpgn_map_commands[];
 extern const struct NamedCommand cmpgn_map_ensign_flag_options[];
 extern const struct NamedCommand cmpgn_map_cmnds_kind[];
@@ -180,13 +188,13 @@ struct LevelInformation *new_level_info_entry(struct GameCampaign *campgn, Level
 // Support for lists of campaigns
 TbBool init_campaigns_list_entries(struct CampaignsList *clist, long num_entries);
 TbBool grow_campaigns_list_entries(struct CampaignsList *clist, long add_entries);
-TbBool load_campaigns_list(void);
-TbBool load_mappacks_list(void);
-TbBool change_campaign(const char *cmpgn_fname);
+TbBool load_campaigns_list(struct CampaignsList *clist, short fgroup, const char* list_name, const char* order_fname);
+TbBool change_campaign(uint8_t pack, const char *cmpgn_fname);
 TbBool is_campaign_loaded(void);
 TbBool is_campaign_in_list(const char *cmpgn_fname, struct CampaignsList *clist);
-TbBool check_lif_files_in_mappack(struct GameCampaign *campgn);
+uint8_t prepare_campaign_file_name(const char *cmpgn_fname, char *cmpgn_file, int cmpgn_file_len);
 TbBool is_map_pack(void);
+void set_default_mp_mappack(void);
 /******************************************************************************/
 #ifdef __cplusplus
 }

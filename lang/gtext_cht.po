@@ -2690,6 +2690,7 @@ msgid "Play Intro"
 msgstr "播放开场动画"
 
 #: guitext:350
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Multiplayer Menu"
 msgstr "多人遊戲選單"
@@ -2915,6 +2916,7 @@ msgid "Testers"
 msgstr "测试员"
 
 #: guitext:395
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Game Lobbies"
 msgstr "遊戲大廳"
@@ -2925,6 +2927,7 @@ msgid "Name"
 msgstr "姓名"
 
 #: guitext:397
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Game Modes"
 msgstr "遊戲模式"
@@ -2935,11 +2938,13 @@ msgid "Messages"
 msgstr "讯息"
 
 #: guitext:399
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Create Lobby"
 msgstr "建立大廳"
 
 #: guitext:400
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Join Lobby"
 msgstr "加入大廳"
@@ -2950,6 +2955,7 @@ msgid "Start Game"
 msgstr "开始游戏"
 
 #: guitext:402
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Online Lobbies"
 msgstr "線上大廳"
@@ -5509,16 +5515,19 @@ msgid "4 Players"
 msgstr "四名玩者"
 
 #: guitext:874
+#, fuzzy
 msgctxt "Menu interface, Network service item"
 msgid "Online"
 msgstr "線上"
 
 #: guitext:875
+#, fuzzy
 msgctxt "Menu interface, Network service item"
 msgid "LAN"
 msgstr "區域網路"
 
 #: guitext:876
+#, fuzzy
 msgctxt "Menu interface, Network service item"
 msgid "Skirmish"
 msgstr "遭遇戰"
@@ -6232,7 +6241,17 @@ msgctxt "Menu interface item"
 msgid "Lost Levels"
 msgstr ""
 
-#: guitext:976 guitext:977 guitext:978 guitext:979 guitext:980
+#: guitext:976
+msgctxt "Menu interface item"
+msgid "Modern Levels"
+msgstr ""
+
+#: guitext:977
+msgctxt "Menu interface item"
+msgid "Bullfrog Levels"
+msgstr ""
+
+#: guitext:978 guitext:979 guitext:980
 msgctxt "Unused"
 msgid "Moo3"
 msgstr ""
@@ -6456,7 +6475,7 @@ msgstr ""
 
 #: guitext:1024
 msgctxt "Menu interface item"
-msgid "Good Campaign"
+msgid "The Good Guys"
 msgstr ""
 
 #: guitext:1025
@@ -6753,16 +6772,19 @@ msgid "Keeper"
 msgstr "守护者"
 
 #: guitext:1083
+#, fuzzy
 msgctxt "Game controls"
 msgid "Screen Capture"
 msgstr "螢幕錄製"
 
 #: guitext:1084
+#, fuzzy
 msgctxt "Game controls"
 msgid "Screenshot"
 msgstr "螢幕截圖"
 
 #: guitext:1085
+#, fuzzy
 msgctxt "Game controls"
 msgid "Frame Skip Increase"
 msgstr "增加跳幀"
@@ -6876,3 +6898,71 @@ msgstr "傳送到集合點"
 msgctxt "Game controls"
 msgid "Teleport Default"
 msgstr "預設傳送"
+
+#: guitext:1110
+msgctxt "Menu interface item"
+msgid "Multiplayer Map Packs"
+msgstr ""
+
+#: guitext:1111
+msgctxt "Menu interface item"
+msgid "Return to Lobby"
+msgstr ""
+
+#: guitext:1112
+msgctxt "In-game message"
+msgid "You have been defeated. As host, keep the game running until the match concludes."
+msgstr "你已被擊敗。作為主機，請讓遊戲繼續執行，直到對戰結束。"
+
+#: guitext:1113
+msgctxt "Network game message"
+msgid "Verify /fxdata/ is the same across all PCs."
+msgstr "請確認所有電腦上的 /fxdata/ 相同。"
+
+#: guitext:1114
+msgctxt "Network game message"
+msgid "WARNING: Custom sprite mismatch with %s!"
+msgstr "警告：與 %s 的自訂精靈不相符！"
+
+#: guitext:1115
+msgctxt "Network game message"
+msgid "I am the computer now!"
+msgstr "我現在由電腦控制！"
+
+#: guitext:1116
+msgctxt "Network game message"
+msgid "%s has left the game."
+msgstr "%s 已離開遊戲。"
+
+#: guitext:1117
+msgctxt "Network game message"
+msgid "%s has disconnected."
+msgstr "%s 已中斷連線。"
+
+#: guitext:1118
+msgctxt "Unused"
+msgid "unused"
+msgstr "unused"
+
+#: guitext:1119
+msgctxt "Network game message"
+msgid "Network connection to host lost"
+msgstr "與主機的網路連線已中斷"
+
+#: guitext:1120
+#, fuzzy
+msgctxt "In-game message"
+msgid "/fxdata/%.39s was not loaded."
+msgstr "/fxdata/%.39s 未載入。"
+
+#: guitext:1121
+#, fuzzy
+msgctxt "In-game message"
+msgid "Please install it as a mod inside the /mods/ folder."
+msgstr "請將其作為模組安裝到 /mods/ 資料夾中。"
+
+#: guitext:1122
+#, fuzzy
+msgctxt "Network game message"
+msgid "Lost connection to server"
+msgstr "與伺服器的連線已中斷。"

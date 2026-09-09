@@ -72,6 +72,7 @@ struct Thing;
 /******************************************************************************/
 TbBool slab_has_trap_on(MapSlabCoord slb_x, MapSlabCoord slb_y);
 TbBool slab_has_sellable_trap_on(MapSlabCoord slb_x, MapSlabCoord slb_y);
+TbBool player_can_sell_trap_on_slab(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_y);
 TbBool subtile_has_sellable_trap_on(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 TbBool subtile_has_trap_on(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 TbBool slab_middle_row_has_trap_on(MapSlabCoord slb_x, MapSlabCoord slb_y);
@@ -84,7 +85,7 @@ struct Thing* activate_trap_spawn_creature(struct Thing* traptng, unsigned char 
 struct Thing *get_trap_for_position(MapSubtlCoord stl_x, MapSubtlCoord stl_y);
 struct Thing *get_trap_for_slab_position(MapSlabCoord slb_x, MapSlabCoord slb_y);
 TbBool trap_is_active(const struct Thing *thing);
-TbBool trap_is_slappable(const struct Thing *thing, PlayerNumber plyr_idx);
+TbBool trap_is_slappable_by_player(const struct Thing *thing, PlayerNumber plyr_idx);
 TbBool thing_is_deployed_trap(const struct Thing *thing);
 short thing_is_destructible_trap(const struct Thing* thing);
 TbBool thing_is_sellable_trap(const struct Thing* thing);
@@ -97,6 +98,7 @@ void activate_trap_by_slap(struct PlayerInfo* player, struct Thing* traptng);
 void process_trap_charge(struct Thing* traptng);
 void script_place_trap(PlayerNumber plyridx, ThingModel trapkind, MapSubtlCoord stl_x, MapSubtlCoord stl_y, TbBool free);
 void set_trap_shots(struct Thing *traptng, int shots);
+void update_trap_draw(struct Thing *traptng);
 
 unsigned long remove_trap(struct Thing *traptng, int32_t *sell_value);
 unsigned long remove_trap_on_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y, int32_t *sell_value);

@@ -22,6 +22,7 @@
 #include "globals.h"
 #include "bflib_basics.h"
 #include "bflib_sound.h"
+#include "config_sounds.h"
 
 #include "bflib_math.h"
 #include "thing_list.h"
@@ -42,8 +43,8 @@
 #include "room_util.h"
 #include "map_blocks.h"
 #include "map_utils.h"
-#include "ariadne_wallhug.h"
 #include "spdigger_stack.h"
+#include "tasks_list.h"
 #include "config_magic.h"
 #include "config_terrain.h"
 #include "gui_soundmsgs.h"
@@ -230,7 +231,7 @@ TbBool creature_increase_available_instances(struct Thing *thing)
             if (crconf->learned_instance_level[i] <= cctrl->exp_level+1) {
                 cctrl->instance_available[k] = true;
             }
-            else if ( (crconf->learned_instance_level[i] > cctrl->exp_level+1) && !(game.conf.rules[thing->owner].game.classic_bugs_flags & ClscBug_RebirthKeepsSpells) )
+            else if ( (crconf->learned_instance_level[i] > cctrl->exp_level+1) && !(game.conf.rules[thing->owner].gameplay.classic_bugs_flags & ClscBug_RebirthKeepsSpells) )
             {
                 cctrl->instance_available[k] = false;
             }
@@ -445,6 +446,23 @@ void process_creature_instance(struct Thing *thing)
     }
 }
 
+void delay_instances_on_drop(struct Thing *thing)
+{
+    GameTurn current_turn = get_gameturn();
+    GameTurnDelta instance_delay_turns = game.conf.rules[thing->owner].creature.instance_delay_on_drop;
+    struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
+    for (int32_t i = 1; i < game.conf.crtr_conf.instances_count; i++) {
+        struct InstanceInfo* inst_inf = creature_instance_info_get(i);
+        GameTurnDelta cooldown_penalty_turns = min(instance_delay_turns, inst_inf->reset_time);
+        GameTurnDelta cooldown_turns = inst_inf->reset_time + cctrl->inst_total_turns - cctrl->inst_action_turns;
+        GameTurnDelta cooldown_turns_elapsed = (GameTurnDelta)(current_turn - cctrl->instance_use_turn[i]);
+        GameTurnDelta required_elapsed_turns = cooldown_turns - cooldown_penalty_turns;
+        if (cooldown_turns_elapsed > required_elapsed_turns) {
+            cctrl->instance_use_turn[i] = current_turn - required_elapsed_turns;
+        }
+    }
+}
+
 long instf_creature_fire_shot(struct Thing *creatng, int32_t *param)
 {
     struct Thing *target;
@@ -617,17 +635,14 @@ long instf_dig(struct Thing *creatng, int32_t *param)
     TRACE_THING(creatng);
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
     struct Dungeon* dungeon = get_dungeon(creatng->owner);
-    long task_idx = cctrl->digger.task_idx;
-    {
-        struct MapTask* task = get_dungeon_task_list_entry(dungeon, task_idx);
-        taskkind = task->kind;
-        if (task->coords != cctrl->digger.task_stl)
-        {
-            return 0;
-      }
-      stl_x = stl_num_decode_x(cctrl->digger.task_stl);
-      stl_y = stl_num_decode_y(cctrl->digger.task_stl);
+    long task_idx = find_dig_from_task_list(creatng->owner, cctrl->digger.task_stl);
+    if (task_idx < 0) {
+        return 0;
     }
+    struct MapTask* task = get_dungeon_task_list_entry(dungeon, task_idx);
+    taskkind = task->kind;
+    stl_x = stl_num_decode_x(cctrl->digger.task_stl);
+    stl_y = stl_num_decode_y(cctrl->digger.task_stl);
     struct SlabMap* slb = get_slabmap_for_subtile(stl_x, stl_y);
     if (slabmap_block_invalid(slb)) {
         return 0;
@@ -681,7 +696,7 @@ long instf_dig(struct Thing *creatng, int32_t *param)
         }
     }
     check_map_explored(creatng, stl_x, stl_y);
-    thing_play_sample(creatng, 72 + SOUND_RANDOM(3), NORMAL_PITCH, 0, 3, 0, 4, FULL_LOUDNESS);
+    thing_play_sample(creatng, snd_dig_impact + SOUND_RANDOM(snd_dig_impact_count), NORMAL_PITCH, 0, 3, 0, 4, FULL_LOUDNESS);
     return 1;
 }
 
@@ -707,7 +722,7 @@ long instf_destroy(struct Thing *creatng, int32_t *param)
             {
                 volume = FULL_LOUDNESS;
             }
-            thing_play_sample(creatng, 5 + SOUND_RANDOM(2), 200, 0, 3, 0, 2, volume);
+            thing_play_sample(creatng, snd_foot_spur + SOUND_RANDOM(2), 200, 0, 3, 0, 2, volume);
             return 0;
         }
         clear_dig_on_room_slabs(room, creatng->owner);
@@ -722,7 +737,7 @@ long instf_destroy(struct Thing *creatng, int32_t *param)
             event_create_event_or_update_nearby_existing_event(ccor_x, ccor_y, EvKind_RoomLost, room->owner, room->kind);
             claim_enemy_room(room, creatng);
         }
-        thing_play_sample(creatng, 76, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
+        thing_play_sample(creatng, snd_spell_stars, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
         create_effects_on_room_slabs(room, imp_spangle_effects[get_player_color_idx(creatng->owner)], 0, creatng->owner);
         return 0;
     }
@@ -733,7 +748,7 @@ long instf_destroy(struct Thing *creatng, int32_t *param)
         {
             volume = FULL_LOUDNESS;
         }
-        thing_play_sample(creatng, 128 + SOUND_RANDOM(3), 200, 0, 3, 0, 2, volume);
+        thing_play_sample(creatng, snd_strike_wall + SOUND_RANDOM(snd_strike_wall_count), 200, 0, 3, 0, 2, volume);
         return 0;
     }
     if (prev_owner != game.neutral_player_num) {
@@ -773,7 +788,7 @@ long instf_attack_room_slab(struct Thing *creatng, int32_t *param)
     {
         //TODO CONFIG damage made to room slabs is constant - doesn't look good
         slb->health -= 2;
-        thing_play_sample(creatng, 128 + SOUND_RANDOM(3), NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
+        thing_play_sample(creatng, snd_strike_wall + SOUND_RANDOM(snd_strike_wall_count), NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
         return 1;
     }
     if (room->owner != game.neutral_player_num)
@@ -792,7 +807,7 @@ long instf_attack_room_slab(struct Thing *creatng, int32_t *param)
         return 0;
     }
     create_effect(&creatng->mappos, TngEff_Explosion3, creatng->owner);
-    thing_play_sample(creatng, 47, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
+    thing_play_sample(creatng, snd_explode, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
     if (z > 0)
     {
         for (long k = 0; k < AROUND_TILES_COUNT; k++)
@@ -827,9 +842,9 @@ long instf_damage_wall(struct Thing *creatng, int32_t *param)
         place_slab_type_on_map(SlbT_EARTH, stl_x, stl_y, creatng->owner, 0);
         do_slab_efficiency_alteration(slb_x, slb_y);
         create_dirt_rubble_for_dug_slab(slb_x, slb_y);
-        thing_play_sample(creatng, 73, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
+        thing_play_sample(creatng, snd_dig_dirt, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
     }
-    thing_play_sample(creatng, 63+SOUND_RANDOM(6), NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
+    thing_play_sample(creatng, snd_dig_spell + SOUND_RANDOM(snd_dig_spell_count), NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
     return 1;
 }
 
@@ -837,8 +852,12 @@ long instf_eat(struct Thing *creatng, int32_t *param)
 {
     TRACE_THING(creatng);
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
-    if (cctrl->hunger_amount > 0)
+    if (cctrl->hunger_amount > 0) {
         cctrl->hunger_amount--;
+    } else
+    if (cctrl->hunger_loss < 255) {
+        cctrl->hunger_loss++;
+    }
     apply_health_to_thing_and_display_health(creatng, game.conf.rules[creatng->owner].health.food_health_gain);
     cctrl->hunger_level = 0;
     return 1;
@@ -848,6 +867,7 @@ long instf_first_person_do_imp_task(struct Thing *creatng, int32_t *param)
 {
     struct CreatureControl* cctrl = creature_control_get_from_thing(creatng);
     struct PlayerInfo* player = get_player(get_appropriate_player_for_creature(creatng));
+    struct UserState* ustate = get_player_user_state(player);
     TRACE_THING(creatng);
     struct SlabMap* slb;
     MapSubtlCoord ahead_stl_x = creatng->mappos.x.stl.num;
@@ -884,7 +904,7 @@ long instf_first_person_do_imp_task(struct Thing *creatng, int32_t *param)
         ahead_stl_x++;
         ahead_slb_x++;
     }
-    if ( (player->selected_fp_thing_pickup != 0) || (cctrl->dragtng_idx != 0) )
+    if ( (ustate->selected_fp_thing_pickup != 0) || (cctrl->dragtng_idx != 0) )
     {
         set_players_packet_action(player, PckA_DirectCtrlDragDrop, 0, 0, 0, 0);
         return 1;
@@ -917,7 +937,7 @@ long instf_first_person_do_imp_task(struct Thing *creatng, int32_t *param)
     slb = get_slabmap_block(slb_x, slb_y);
     if ( check_place_to_convert_excluding(creatng, slb_x, slb_y) )
     {
-        if (!player->first_person_dig_claim_mode)
+        if (!ustate->first_person_dig_claim_mode)
         {
             struct SlabConfigStats* slabst = get_slab_stats(slb);
             instf_destroy(creatng, NULL);
@@ -954,7 +974,7 @@ long instf_first_person_do_imp_task(struct Thing *creatng, int32_t *param)
             return 1;
         }
     }
-    else if (player->first_person_dig_claim_mode)
+    else if (ustate->first_person_dig_claim_mode)
     {
         if (slabmap_owner(slb) == creatng->owner)
         {
@@ -1020,7 +1040,7 @@ long instf_pretty_path(struct Thing *creatng, int32_t *param)
     MapSlabCoord slb_x = subtile_slab(creatng->mappos.x.stl.num);
     MapSlabCoord slb_y = subtile_slab(creatng->mappos.y.stl.num);
     create_effect(&creatng->mappos, imp_spangle_effects[get_player_color_idx(creatng->owner)], creatng->owner);
-    thing_play_sample(creatng, 76, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
+    thing_play_sample(creatng, snd_spell_stars, NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
     place_slab_type_on_map(SlbT_CLAIMED, slab_subtile_center(slb_x), slab_subtile_center(slb_y), creatng->owner, 1);
     do_unprettying(creatng->owner, slb_x, slb_y);
     do_slab_efficiency_alteration(slb_x, slb_y);
@@ -1044,7 +1064,7 @@ long instf_reinforce(struct Thing *creatng, int32_t *param)
     if (cctrl->digger.consecutive_reinforcements <= 25)
     {
         cctrl->digger.consecutive_reinforcements++;
-        if (!S3DEmitterIsPlayingSample(creatng->snd_emitter_id, 63, 0))
+        if (!S3DEmitterIsPlayingSample(creatng->snd_emitter_id, 63))
         {
             struct PlayerInfo* player;
             player = get_my_player();
@@ -1053,7 +1073,7 @@ long instf_reinforce(struct Thing *creatng, int32_t *param)
             {
                 volume = FULL_LOUDNESS;
             }
-            thing_play_sample(creatng, 1005 + SOUND_RANDOM(7), NORMAL_PITCH, 0, 3, 0, 2, volume);
+            thing_play_sample(creatng, snd_reinforce_hit + SOUND_RANDOM(snd_reinforce_hit_count), NORMAL_PITCH, 0, 3, 0, 2, volume);
         }
         return 0;
     }
@@ -1071,7 +1091,7 @@ long instf_reinforce(struct Thing *creatng, int32_t *param)
             create_effect(&pos, imp_spangle_effects[get_player_color_idx(creatng->owner)], creatng->owner);
         }
     }
-    thing_play_sample(creatng, 41, NORMAL_PITCH, 0, 3, 0, 3, FULL_LOUDNESS);
+    thing_play_sample(creatng, snd_spell_wall, NORMAL_PITCH, 0, 3, 0, 3, FULL_LOUDNESS);
     return 0;
 }
 
@@ -1092,7 +1112,7 @@ long instf_tunnel(struct Thing *creatng, int32_t *param)
     if (slabmap_block_invalid(slb)) {
         return 0;
     }
-    thing_play_sample(creatng, 69+SOUND_RANDOM(3), NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
+    thing_play_sample(creatng, snd_tunnel_dig + SOUND_RANDOM(snd_tunnel_dig_count), NORMAL_PITCH, 0, 3, 0, 2, FULL_LOUDNESS);
         if (slb->health > 1) {
         slb->health--;
         } else {
@@ -1263,7 +1283,7 @@ TbBool validate_target_generic
     )
 {
     if (!validate_target_even_in_prison(source, target, inst_idx, param1, param2) ||
-        creature_is_being_tortured(target) || creature_is_kept_in_prison(target))
+        creature_is_being_tortured_including_kinky(target) || creature_is_kept_in_prison(target))
     {
         return false;
     }
@@ -1614,8 +1634,8 @@ TbBool validate_target_benefits_from_healing
     }
     else
     {
-        if (creature_is_being_tortured(target) || creature_is_kept_in_prison(target) ||
-            creature_is_being_tortured(source) || creature_is_kept_in_prison(source))
+        if (creature_is_being_tortured_including_kinky(target) || creature_is_kept_in_prison(target) ||
+            creature_is_being_tortured_including_kinky(source) || creature_is_kept_in_prison(source))
         {
             return false;
         }
@@ -1853,8 +1873,8 @@ TbBool validate_target_requires_cleansing
     }
     else
     {
-        if (creature_is_being_tortured(target) || creature_is_kept_in_prison(target) ||
-            creature_is_being_tortured(source) || creature_is_kept_in_prison(source) ||
+        if (creature_is_being_tortured_including_kinky(target) || creature_is_kept_in_prison(target) ||
+            creature_is_being_tortured_including_kinky(source) || creature_is_kept_in_prison(source) ||
             creature_under_spell_effect(source, CSAfF_Freeze) || creature_under_spell_effect(source, CSAfF_Chicken)) // not allowed to cleanse others (only itself) even if source param1 is set
         {
             return false;

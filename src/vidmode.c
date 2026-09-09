@@ -17,6 +17,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include "kfx/renderer/RendererManager.h"
 #include "vidmode.h"
 
 #include "globals.h"
@@ -497,6 +498,7 @@ void unload_pointer_file(short hi_res)
 
 TbBool init_fades_table(void)
 {
+    static const TbPixel abyss_colours[] = {160, 1, 253};
     char* fname = prepare_file_path(FGrp_StdData, "tables.dat");
     SYNCDBG(0,"Reading fade table file \"%s\".",fname);
     if (LbFileLoadAt(fname, &pixmap) != sizeof(struct TbColorTables))
@@ -512,6 +514,9 @@ TbBool init_fades_table(void)
         if (pixmap.fade_tables[i] == 0) {
             pixmap.fade_tables[i] = cblack;
         }
+    }
+    for (int i = 0; i < 256; i++) {
+        pixmap.map_abyss[i] = abyss_colours[pixmap.ghost[i] * 3 >> 8];
     }
     return true;
 }
@@ -629,7 +634,7 @@ TbScreenMode setup_screen_mode(TbScreenMode nmode, TbBool failsafe)
   }
   TbBool hi_res = ((LbGraphicsScreenHeight() < 400) ? false : true);
   long lens_mem = game.applied_lens_type;
-  unsigned int flg_mem = lbDisplay.DrawFlags;
+  unsigned int flg_mem = RendererGetDrawFlags();
   TbBool was_minimal_res = (MinimalResolutionSetup || force_video_mode_reset);
   set_pointer_graphic_none();
   if (LbGraphicsScreenHeight() < 200)
@@ -644,7 +649,7 @@ TbScreenMode setup_screen_mode(TbScreenMode nmode, TbBool failsafe)
       unload_pointer_file(hi_res);
     }
     if (nmode != old_mode)
-        LbScreenReset(false);
+        RendererResetScreen(false);
     if (MinimalResolutionSetup) {
       if (hi_res) {
         FreeVResMinimal();
@@ -688,7 +693,7 @@ TbScreenMode setup_screen_mode(TbScreenMode nmode, TbBool failsafe)
     }
     if ((nmode != old_mode) || (was_minimal_res))
     {
-        if (LbScreenSetup(nmode, new_mdinfo->Width, new_mdinfo->Height, engine_palette, (hi_res ? 1 : 2), 0) < Lb_SUCCESS)
+        if (RendererSetupScreen(nmode, new_mdinfo->Width, new_mdinfo->Height, engine_palette, (hi_res ? 1 : 2), 0) < Lb_SUCCESS)
         {
           ERRORLOG("Unable to setup screen resolution %s (mode %d)", new_mdinfo->Desc,(int)nmode);
           force_video_mode_reset = true;
@@ -697,13 +702,13 @@ TbScreenMode setup_screen_mode(TbScreenMode nmode, TbBool failsafe)
     }
     load_pointer_file(hi_res);
   }
-  LbScreenClear(0);
-  LbScreenSwap();
+  RendererClearScreen(0);
+  RendererPresentFrame();
   update_screen_mode_data(new_mdinfo->Width, new_mdinfo->Height);
   if (parchment_loaded)
     reload_parchment_file(hi_res);
   reinitialise_eye_lens(lens_mem);
-  lbDisplay.DrawFlags = flg_mem;
+  RendererSetDrawFlags(flg_mem);
   setup_heap_manager();
   force_video_mode_reset = false;
   SYNCDBG(8,"Finished");
@@ -754,7 +759,7 @@ TbBool update_screen_mode_data(long width, long height)
   // Main menu scaling: Campaign map "land view" screen (including the window frame)
   calculate_landview_upp(width, height, LANDVIEW_MAP_WIDTH, LANDVIEW_MAP_HEIGHT); // 16 is "kfx default" for 640x480 game window (1x), a 960x720 frame (1.5x), and a 1280x960 landview (2x)
 
-  LbMouseChangeMoveRatio(base_mouse_sensitivity*units_per_pixel/16, base_mouse_sensitivity*units_per_pixel/16);
+  LbMouseChangeMoveRatio(base_mouse_sensitivity, base_mouse_sensitivity);
   LbMouseSetPointerHotspot(0, 0);
   LbScreenSetGraphicsWindow(0, 0, MyScreenWidth/pixel_size, MyScreenHeight/pixel_size);
   LbTextSetWindow(0, 0, MyScreenWidth/pixel_size, MyScreenHeight/pixel_size);
@@ -800,7 +805,7 @@ TbScreenMode setup_screen_mode_minimal(TbScreenMode nmode)
     }
   }
   TbBool hi_res = ((LbGraphicsScreenHeight() < 400) ? false : true);
-  ushort flg_mem = lbDisplay.DrawFlags;
+  ushort flg_mem = RendererGetDrawFlags();
   if (LbGraphicsScreenHeight() < 200)
   {
     WARNLOG("Unhandled previous Screen Mode %d, Reset skipped",(int)old_mode);
@@ -814,7 +819,7 @@ TbScreenMode setup_screen_mode_minimal(TbScreenMode nmode)
     if ((!MinimalResolutionSetup && !hi_res) || (MinimalResolutionSetup && hi_res))
       unload_pointer_file(hi_res);
     if ((nmode != old_mode) || (force_video_mode_reset))
-      LbScreenReset(false);
+      RendererResetScreen(false);
     if (hi_res)
     {
       if (MinimalResolutionSetup) {
@@ -853,7 +858,7 @@ TbScreenMode setup_screen_mode_minimal(TbScreenMode nmode)
 
     if ((nmode != old_mode) || (force_video_mode_reset))
     {
-        if (LbScreenSetup(nmode, new_mdinfo->Width, new_mdinfo->Height, engine_palette, (hi_res ? 1 : 2), 0) < Lb_SUCCESS)
+        if (RendererSetupScreen(nmode, new_mdinfo->Width, new_mdinfo->Height, engine_palette, (hi_res ? 1 : 2), 0) < Lb_SUCCESS)
         {
           ERRORLOG("Unable to setup screen resolution %s (mode %d)", new_mdinfo->Desc,(int)nmode);
           force_video_mode_reset = true;
@@ -861,10 +866,10 @@ TbScreenMode setup_screen_mode_minimal(TbScreenMode nmode)
         }
     }
   }
-  LbScreenClear(0);
-  LbScreenSwap();
+  RendererClearScreen(0);
+  RendererPresentFrame();
   update_screen_mode_data(new_mdinfo->Width, new_mdinfo->Height);
-  lbDisplay.DrawFlags = flg_mem;
+  RendererSetDrawFlags(flg_mem);
   force_video_mode_reset = false;
   return nmode;
 }
@@ -898,7 +903,7 @@ TbScreenMode setup_screen_mode_zero(TbScreenMode nmode)
       new_mdinfo = LbScreenGetModeInfo(nmode);
   }
   LbPaletteDataFillBlack(engine_palette);
-  if (LbScreenSetup(nmode, new_mdinfo->Width, new_mdinfo->Height, engine_palette, 2, 0) < Lb_SUCCESS)
+  if (RendererSetupScreen(nmode, new_mdinfo->Width, new_mdinfo->Height, engine_palette, 2, 0) < Lb_SUCCESS)
   {
       ERRORLOG("Unable to setup screen resolution %s (mode %d)", new_mdinfo->Desc,(int)nmode);
       return Lb_SCREEN_MODE_INVALID;
@@ -982,12 +987,12 @@ TbBool switch_to_next_video_mode(void)
   {
     if (failsafe)
     {
-      show_onscreen_msg(game_num_fps * 6, "%s", get_string(856));
+      show_onscreen_msg(turns_per_second * 6, "%s", get_string(856));
     }
     else
     {
       // we managed to switch to a new mode
-      show_onscreen_msg(game_num_fps * 6, "%s", get_vidmode_name(scrmode));
+      show_onscreen_msg(turns_per_second * 6, "%s", get_vidmode_name(scrmode));
       settings.switching_vidmodes_index = i;
       save_settings();
     }

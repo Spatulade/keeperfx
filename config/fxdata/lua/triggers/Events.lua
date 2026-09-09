@@ -114,15 +114,25 @@ function RegisterCreatureRebirthEvent(action, unit)
     return trigger
 end
 
+function RegisterCreatureFellIntoAbyssEvent(action, unit)
+    local trigData = {unit = unit}
+
+    local trigger = CreateTrigger("CreatureFellIntoAbyss",action,trigData)
+    if unit then
+        TriggerAddCondition(trigger, function(eventData,triggerData) return eventData.unit == triggerData.unit end)
+    end
+    return trigger
+end
+
 ---Triggers when an object is destroyed
 ---@param action function|string the function to call when the event happens
 ---@param object? Object the object that triggers the event
 ---@return table
 function RegisterObjectDestroyedEvent(action, object)
-    local trigData = {thing = object}
+    local trigData = {object = object}
 
     local trigger = CreateTrigger("Destroyed",action,trigData)
-    if unit then
+    if object then
         TriggerAddCondition(trigger, function(eventData,triggerData) return eventData.object == triggerData.object end)
     end
     return trigger
@@ -174,11 +184,48 @@ end
 ---@param creature? Creature the unit that triggers the event
 ---@return table
 function RegisterLevelUpEvent(action, creature)
-    local trigData = {creature = creature}
+    local trigData = { creature = creature }
 
-    local trigger = CreateTrigger("LevelUp",action,trigData)
+    local trigger = CreateTrigger("LevelUp", action, trigData)
     if creature then
-        TriggerAddCondition(trigger, function(eventData,triggerData) return eventData.creature == triggerData.creature end)
+        TriggerAddCondition(trigger,
+            function(eventData, triggerData) return eventData.creature == triggerData.creature end)
+    end
+    return trigger
+end
+
+---Triggers when a thing is slapped
+---@param action function|string the function to call when the event happens
+---@param thing? Thing the thing that got slapped
+---@param player? Player the player doing the slap
+---@return Trigger
+function RegisterSlapEvent(action, thing, player)
+    local trigData = { Thing = thing, Player = player }
+    
+    local trigger = CreateTrigger("Slap",action,trigData)
+    if thing then
+        TriggerAddCondition(trigger, function(eventData, triggerData) return eventData.thing == triggerData.Thing end)
+    end
+    if player then
+        TriggerAddCondition(trigger, function(eventData,triggerData) return eventData.player == triggerData.Player end)
+    end
+    return trigger
+end
+
+---Triggers when a thing is picked up
+---@param action function|string the function to call when the event happens
+---@param thing? Thing the thing that got picked up
+---@param player? Player the player picking up
+---@return Trigger
+function RegisterPickUpEvent(action, thing, player)
+    local trigData = { Thing = thing, Player = player }
+    
+    local trigger = CreateTrigger("PickUp",action,trigData)
+    if thing then
+        TriggerAddCondition(trigger, function(eventData, triggerData) return eventData.thing == triggerData.Thing end)
+    end
+    if player then
+        TriggerAddCondition(trigger, function(eventData,triggerData) return eventData.player == triggerData.Player end)
     end
     return trigger
 end
@@ -237,6 +284,52 @@ function RegisterRoomOwnerChangeEvent(action, room_type, old_owner, owner)
     end
     if owner then
         TriggerAddCondition(trigger, function(eventData, triggerData) return eventData.Room.owner.playerId == triggerData.owner.playerId end)
+    end
+    return trigger
+end
+
+---Triggers when a shot hits something
+---eventData.shot contains the shot
+---eventData.shooter contains the object that fired the shot (can be nil)
+---eventData.target contains the thing that was hit (can be nil)
+---eventData.next_stl_x and eventData.next_stl_y contains the next subtile the shot would be if it didn't hit something.
+---eventData.rebound_hit if the shot hit a creature with rebound (and the shot was not rebound_immune)
+---@param action function|string the function to call when the event happens
+---@param shooter_type? creature_type | trap_type filter on the type of creature/trap that fired the shot. (nil for any)
+---@param target_type? creature_type | trap_type | string filter on the type of target (nil for any)
+---@param shot_type? string filter on the type of shot (nil for any)
+---@return table
+function RegisterOnShotHitEvent(action, shooter_type, target_type, shot_type)
+    local trigData = {shooter_type = shooter_type, target_type = target_type, shot_type = shot_type}
+    local trigger = CreateTrigger("ShotHitThing", action, trigData)
+    if shooter_type then
+        TriggerAddCondition(trigger, function(eventData, triggerData) return eventData.shooter ~= nil  and eventData.shooter.model == triggerData.shooter_type end)
+    end
+    if target_type then
+        TriggerAddCondition(trigger, function(eventData, triggerData) return eventData.target ~= nil and eventData.target.model == triggerData.target_type end)
+    end
+    if shot_type then
+        TriggerAddCondition(trigger, function(eventData, triggerData) return eventData.shot.model == triggerData.shot_type end)
+    end
+    return trigger
+end
+
+
+---Triggers when a chat message is received
+---eventData.Player contains the player who sent the message
+---eventData.Message contains the message text
+---@param action function|string the function to call when the event happens
+---@param player? Player filter on the player who sent the message (nil for any)
+---@param message? string filter on the message text (nil for any)
+---@return table
+function RegisterOnChatMsgEvent(action, player, message)
+    local trigData = {player = player, message = message}
+    local trigger = CreateTrigger("ChatMsg", action, trigData)
+    if player then
+        TriggerAddCondition(trigger, function(eventData, triggerData) return eventData.Player == triggerData.player end)
+    end
+    if message then
+        TriggerAddCondition(trigger, function(eventData, triggerData) return eventData.Message == triggerData.message end)
     end
     return trigger
 end

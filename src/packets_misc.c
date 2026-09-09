@@ -16,15 +16,16 @@
  *     (at your option) any later version.
  */
 /******************************************************************************/
+#include "net_game.h"
 #include "pre_inc.h"
+#include "kfx/renderer/RendererManager.h"
 #include "packets.h"
-#include "net_received_packets.h"
-#include "net_redundant_packets.h"
 
 #include "bflib_fileio.h"
-#include "bflib_network_exchange.h"
+#include "net_exchange_gameplay.h"
 #include "bflib_datetm.h"
 #include "front_landview.h"
+#include "frontend.h"
 #include "game_legacy.h"
 #include "game_saves.h"
 #include "gui_topmsg.h"
@@ -35,7 +36,7 @@
 extern "C" {
 #endif
 /******************************************************************************/
-#define PACKET_TURN_SIZE (NET_PLAYERS_COUNT*sizeof(struct PacketEx) + sizeof(TbBigChecksum))
+#define PACKET_TURN_SIZE (PACKETS_COUNT*sizeof(struct Packet) + sizeof(TbBigChecksum))
 #define MULTIPLAYER_PAUSE_COOLDOWN_MS 500
 struct Packet bad_packet;
 unsigned long initial_replay_seed;
@@ -43,19 +44,37 @@ unsigned long last_pause_toggle_time = 0;
 extern TbBool IMPRISON_BUTTON_DEFAULT;
 extern TbBool FLEE_BUTTON_DEFAULT;
 extern TbBool get_skip_heart_zoom_feature(void);
-extern unsigned long get_host_player_id(void);
-extern void LbNetwork_TimesyncBarrier(void);
 extern TbBool keeper_screen_redraw(void);
-extern TbResult LbScreenSwap(void);
 /******************************************************************************/
 #ifdef __cplusplus
 }
 #endif
 
+NetUserId get_local_user(void)
+{
+    if (!network_is_active())
+    {
+        return SOLO_HUMAN_ID;
+    }
+
+    if (netstate.my_id >= 0 && netstate.my_id < MAX_NET_USERS)
+    {
+        return netstate.my_id;
+    }
+
+    assert(false);
+    return 0;
+}
+
+struct Packet *get_local_packet(void)
+{
+    return get_packet(get_local_user());
+}
+
 void set_players_packet_action(struct PlayerInfo *player, unsigned char pcktype,
         unsigned long par1, unsigned long par2, unsigned short par3, unsigned short par4)
 {
-    struct Packet* pckt = get_packet_direct(player->packet_num);
+    struct Packet* pckt = get_packet(player->user_id);
     pckt->actn_par1 = par1;
     pckt->actn_par2 = par2;
     pckt->actn_par3 = par3;
@@ -65,7 +84,7 @@ void set_players_packet_action(struct PlayerInfo *player, unsigned char pcktype,
 
 unsigned char get_players_packet_action(struct PlayerInfo *player)
 {
-    struct Packet* pckt = get_packet_direct(player->packet_num);
+    struct Packet* pckt = get_packet(player->user_id);
     return pckt->action;
 }
 
@@ -76,7 +95,7 @@ void set_packet_control(struct Packet *pckt, unsigned long flag)
 
 void set_players_packet_control(struct PlayerInfo *player, unsigned long flag)
 {
-    struct Packet* pckt = get_packet_direct(player->packet_num);
+    struct Packet* pckt = get_packet(player->user_id);
     pckt->control_flags |= flag;
 }
 
@@ -87,7 +106,7 @@ void unset_packet_control(struct Packet *pckt, unsigned long flag)
 
 void unset_players_packet_control(struct PlayerInfo *player, unsigned long flag)
 {
-    struct Packet* pckt = get_packet_direct(player->packet_num);
+    struct Packet* pckt = get_packet(player->user_id);
     pckt->control_flags &= ~flag;
 }
 
@@ -101,29 +120,15 @@ void set_players_packet_position(struct Packet *pckt, long x, long y, unsigned c
 }
 
 /**
- * Gives a pointer for the player's packet.
- * @param plyr_idx The player index for which we want the packet.
+ * Gives a pointer to the packet of a given network user.
+ * @param user Network user id. Note that it may differ from the player index.
  * @return Returns Packet pointer. On error, returns a dummy structure.
  */
-struct Packet *get_packet(long plyr_idx)
+struct Packet *get_packet(NetUserId user)
 {
-    struct PlayerInfo* player = get_player(plyr_idx);
-    if (player_invalid(player))
+    if ((user < 0) || (user >= PACKETS_COUNT))
         return INVALID_PACKET;
-    if (player->packet_num >= PACKETS_COUNT)
-        return INVALID_PACKET;
-    return &game.packets[player->packet_num];
-}
-/**
- * Gives a pointer to packet of given index.
- * @param pckt_idx Packet index in the array. Note that it may differ from player index.
- * @return Returns Packet pointer. On error, returns a dummy structure.
- */
-struct Packet *get_packet_direct(long pckt_idx)
-{
-    if ((pckt_idx < 0) || (pckt_idx >= PACKETS_COUNT))
-        return INVALID_PACKET;
-    return &game.packets[pckt_idx];
+    return &game.packets[user];
 }
 
 void clear_packets(void)
@@ -173,8 +178,7 @@ TbBool open_packet_file_for_load(char *fname, struct CatalogueEntry *centry)
 void post_init_packets(void)
 {
     SYNCDBG(6,"Starting");
-    initialize_packet_tracking();
-    initialize_redundant_packets();
+    initialize_packet_history();
     if ((game.packet_load_enable) && (game.packet_load_initialized))
     {
         struct CatalogueEntry centry;
@@ -223,15 +227,15 @@ short save_packets(void)
         chksum = 0;
     LbFileSeek(game.packet_save_fp, 0, Lb_FILE_SEEK_END);
     // Prepare data in the buffer
-    for (int i = 0; i < NET_PLAYERS_COUNT; i++)
+    for (int i = 0; i < PACKETS_COUNT; i++)
         memcpy(&pckt_buf[i*sizeof(struct Packet)], &game.packets[i], sizeof(struct Packet));
-    memcpy(&pckt_buf[NET_PLAYERS_COUNT*sizeof(struct Packet)], &chksum, sizeof(TbBigChecksum));
+    memcpy(&pckt_buf[PACKETS_COUNT*sizeof(struct Packet)], &chksum, sizeof(TbBigChecksum));
     // Write buffer into file
     if (LbFileWrite(game.packet_save_fp, &pckt_buf, turn_data_size) != turn_data_size)
     {
         ERRORLOG("Packet file write error");
     }
-    for (int i = 0; i < NET_PLAYERS_COUNT; i++) {
+    for (int i = 0; i < PACKETS_COUNT; i++) {
         if (game.packets[i].action == PckA_PlyrMsgEnd) {
             if (LbFileWrite(game.packet_save_fp, get_player(i)->mp_pending_message, PLAYER_MP_MESSAGE_LEN) != PLAYER_MP_MESSAGE_LEN) {
                 ERRORLOG("Chat message file write error");
@@ -361,9 +365,9 @@ void load_packets_for_turn(GameTurn nturn)
         return;
     }
     game.packet_file_pos += turn_data_size;
-    for (long i = 0; i < NET_PLAYERS_COUNT; i++)
+    for (long i = 0; i < PACKETS_COUNT; i++)
         memcpy(&game.packets[i], &pckt_buf[i * sizeof(struct Packet)], sizeof(struct Packet));
-    for (long i = 0; i < NET_PLAYERS_COUNT; i++) {
+    for (long i = 0; i < PACKETS_COUNT; i++) {
         if (game.packets[i].action == PckA_PlyrMsgEnd) {
             if (LbFileRead(game.packet_save_fp, get_player(i)->mp_pending_message, PLAYER_MP_MESSAGE_LEN) == PLAYER_MP_MESSAGE_LEN) {
                 game.packet_file_pos += PLAYER_MP_MESSAGE_LEN;
@@ -372,7 +376,7 @@ void load_packets_for_turn(GameTurn nturn)
             }
         }
     }
-    TbBigChecksum tot_chksum = llong(&pckt_buf[NET_PLAYERS_COUNT * sizeof(struct Packet)]);
+    TbBigChecksum tot_chksum = llong(&pckt_buf[PACKETS_COUNT * sizeof(struct Packet)]);
     if (game.turns_fastforward > 0)
         game.turns_fastforward--;
     if (game.packet_checksum_verify)
@@ -381,7 +385,7 @@ void load_packets_for_turn(GameTurn nturn)
         {
             ERRORLOG("PacketSave checksum - Out of sync (GameTurn %u)", get_gameturn());
             if (!is_onscreen_msg_visible())
-                show_onscreen_msg(game_num_fps, "Out of sync");
+                show_onscreen_msg(turns_per_second, "Out of sync");
         }
     }
 }
@@ -391,7 +395,7 @@ void set_packet_pause_toggle()
     struct PlayerInfo* player = get_my_player();
     if (player_invalid(player))
         return;
-    if (player->packet_num >= PACKETS_COUNT)
+    if (player->user_id >= PACKETS_COUNT)
         return;
     if (game.game_kind != GKind_LocalGame) {
         unsigned long current_time = LbTimerClock();
@@ -406,17 +410,25 @@ void set_packet_pause_toggle()
         return;
     }
     if (game.game_kind != GKind_LocalGame) {
-        MULTIPLAYER_LOG("set_packet_pause_toggle: Initiating unpause timesync");
+        MULTIPLAYER_LOG("set_packet_pause_toggle: broadcasting unpause");
         unpausing_in_progress = 1;
         keeper_screen_redraw();
-        LbScreenSwap();
-        LbNetwork_BroadcastUnpauseTimesync();
-        if (my_player_number == get_host_player_id()) {
-            LbNetwork_TimesyncBarrier();
+        RendererPresentFrame();
+        LbNetwork_BroadcastUnpause();
+        if (network_is_host()) {
             process_pause_packet(0, 0);
         }
         unpausing_in_progress = 0;
         return;
     }
     process_pause_packet(0, 0);
+}
+
+void disable_packet_mode(void)
+{
+    close_packet_file();
+    game.packet_load_enable = false;
+    game.packet_save_enable = false;
+    show_onscreen_msg(2*turns_per_second, "Packet mode disabled");
+    set_gui_visible(true);
 }

@@ -8,10 +8,12 @@
 ---@field name string name visible in possession or query menu
 ---@field party Creature[] list of creatures in the party, first entry is the leader
 ---@field workroom Room the room the creature is currently working in
----@field state string
----@field continue_state string
+---@field state creature_state
+---@field state_besides_interruptions creature_state the state the creature is in, ignoring interruption states like moving around or being slapped. Used for checking what the creature is actually doing instead of just what state it is in. read-only
+---@field continue_state creature_state
 ---@field moveto_pos Pos3d should be combined with assigning a state that makes use of it
 ---@field flee_pos Pos3d The position the creature will flee too. For keeper creatures this is their lair
+---@field lair Thing|nil the lair totem of the creature, if it has one
 ---@field max_speed integer the movement speed of the creature after spell modifications
 ---@field gold_held integer gold carried by the creature
 ---@field opponents_count integer number of creatures it is in battle with, combined ranged and melee
@@ -32,6 +34,8 @@
 ---@field patrol_pos Pos3d should be combined with assigning a hero state that makes use of it
 ---@field patrol_countdown integer When this value reaches 0 the hero will look for new patrol position on its own. Used for brief pauses between movements.
 ---@field conscious_back_turns integer Turns until the creature wakes up from stun.
+---@field unsummon_duration integer Turns until the creature will unsummon. It's set on temporary creatures/familiars.
+---@field familiars Creature[] list of familiars of the creature.
 if not Creature then Creature = {} end
 
 --- @param action function|string the function to call when the event happens
@@ -51,8 +55,12 @@ function Creature:teleport(location,effect) end
 function Creature:kill(killer) end
 
 ---Stuns the creature
----@param turns ? Sets conscious_back_turns; the duration of the stun.
+---@param turns? integer Sets conscious_back_turns; the duration of the stun.
 function Creature:stun(turns) end
+
+---Temporarily removes the creature from play.
+---@param turns integer
+function Creature:remove_from_play(turns) end
 
 ---increases creatures level by a given amount
 ---@param levels integer
@@ -60,6 +68,16 @@ function Creature:level_up(levels) end
 
 ---sends the creature to the next level, similar to using the special box and selecting said unit
 function Creature:transfer() end
+
+---Transforms the creature into another model
+---@param creaturemodel creature_type type of creature to transform into
+---@param level integer xp level the creature gets. Use 0 for random
+---@return Creature|nil newcreature the newly created creature, nil if failed
+function Creature:transform(creaturemodel,level) end
+
+---Checks if the creature is under enemy custody (e.g. in prison or torture chamber)
+---@return boolean in_enemy_custody If the creature is currently controlled by the enemy
+function Creature:in_enemy_custody() end
 
 ---makes the creature walk to a given subtile, combine with continue_state, so it knows what to do after it arrives.
 ---e.g cr:walk_to(5,5)

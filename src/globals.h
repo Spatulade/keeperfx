@@ -64,6 +64,7 @@
 #include <algorithm>
 using std::min;
 using std::max;
+using std::clamp;
 extern "C" {
 #endif
 
@@ -316,11 +317,14 @@ typedef uint16_t NavColour;
 typedef int8_t SmallAroundIndex;
 /** a player state as defined in config_players*/
 typedef uint8_t PlayerState;
+/** Index to the Creature Control array. */
 typedef uint16_t CctrlIndex;
 /** index to a function, positive for C functions, negative for lua functions*/
 typedef int16_t FuncIdx;
+/** locations like an action point, last event etc. */
 typedef uint32_t TbMapLocation;
-
+/** Controller buttons state. flags field, each bit represents a button */
+typedef uint64_t TbControllerButtons; 
 
 /**
  * Stores a 2d coordinate (x,y).
@@ -332,14 +336,14 @@ typedef uint32_t TbMapLocation;
  */
 struct Coord2d {
     union { // x position
-      uint32_t val; /**< x.val - coord x position (relative to whole map) */
+      int32_t val; /**< x.val - coord x position (relative to whole map) */
       struct { // subtile
         uint8_t pos; /**< x.stl.pos - coord x position (relative to subtile) */
         uint16_t num; /**< x.stl.num - subtile x position (relative to whole map) */
         } stl;
     } x;
     union { // y position
-      uint32_t val; /**< y.val - coord y position (relative to whole map) */
+      int32_t val; /**< y.val - coord y position (relative to whole map) */
       struct { // subtile
         uint8_t pos; /**< y.stl.pos - coord y position (relative to subtile) */
         uint16_t num; /**< y.stl.num - subtile y position (relative to whole map) */

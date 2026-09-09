@@ -19,6 +19,7 @@
 #include "config_effects.h"
 #include "config_objects.h"
 #include "config_trapdoor.h"
+#include "config_crtrstates.h"
 
 #include "post_inc.h"
 
@@ -27,6 +28,33 @@ extern "C" {
 #endif
 
 struct lua_State *Lvl_script = NULL;
+
+
+static int lua_disabled_os_function(lua_State *L)
+{
+    const char *func_name = lua_tostring(L, lua_upvalueindex(1));
+    WARNLOG("os.%s is disabled because it is not synchronized in multiplayer", func_name);
+    return luaL_error(L, "os.%s is disabled because it is not synchronized in multiplayer", func_name);
+}
+
+
+static void disable_lua_functions(lua_State *L)
+{
+    if (!network_is_active()) {
+        return;
+    }
+    const char *disabled_os_functions[] = {"time", "date", "clock"};
+
+    lua_getglobal(L, "os");
+    if (lua_istable(L, -1)) {
+        for (int i = 0; i < sizeof(disabled_os_functions) / sizeof(disabled_os_functions[0]); i++) {
+            lua_pushstring(L, disabled_os_functions[i]);
+            lua_pushcclosure(L, lua_disabled_os_function, 1);
+            lua_setfield(L, -2, disabled_os_functions[i]);
+        }
+    }
+    lua_pop(L, 1);
+}
 
 
 TbBool CheckLua(lua_State *L, int result, const char* func)
@@ -161,31 +189,137 @@ void lua_set_random_seed(unsigned int seed)
     lua_pop(Lvl_script, 1); // Pop math table or nil
 }
 
+
+/* @comment
+ *     The loading items of open_lua_script and open_lua_script_for_mod need to be consistent.
+ * @note
+ *     We do not setLuaPath for mod, so can load only a single lua file without dependencies.
+ */
+static TbBool open_lua_script_for_mod(lua_State* L, LevelNumber lvnum, const struct ModConfigItem *mod_item)
+{
+    TbBool result = false;
+    const struct ModExistState *mod_state = &mod_item->state;
+    char* fname = NULL;
+    char mod_dir[256] = {0};
+    sprintf(mod_dir, "%s/%s", MODS_DIR_NAME, mod_item->name);
+
+    // If the mod name contains characters that the identifier does not support, ignore it.
+    if (strpbrk(mod_item->name, " -") != NULL)
+        return false;
+
+    if (mod_state->fx_data)
+    {
+        fname = prepare_file_fmtpath_mod(mod_dir, FGrp_FxData, "lua/init.lua");
+        if (LbFileExists(fname))
+        {
+            if (CheckLua(L, luaL_dofile(L, fname), "mod_fxdata_lua_file"))
+            {
+                result = true;
+            }
+            else
+            {
+                ERRORLOG("failed to load mod fxdata lua script for %s", mod_item->name);
+            }
+        }
+    }
+
+    if (mod_state->cmpg_config)
+    {
+        fname = prepare_file_fmtpath_mod(mod_dir, FGrp_CmpgConfig, "lua/init.lua");
+        if (LbFileExists(fname))
+        {
+            if (CheckLua(L, luaL_dofile(L, fname), "mod_campaign_lua_file"))
+            {
+                result = true;
+            }
+            else
+            {
+                ERRORLOG("failed to load mod campaign lua script for %s", mod_item->name);
+            }
+        }
+    }
+
+    if (mod_state->cmpg_lvls)
+    {
+        short fgroup = get_level_fgroup(lvnum);
+        fname = prepare_file_fmtpath_mod(mod_dir, fgroup, "map%05lu.lua", (unsigned long)lvnum);
+        if (LbFileExists(fname))
+        {
+            if(CheckLua(L, luaL_dofile(L, fname), "mod_level_script_loading"))
+            {
+                result = true;
+            }
+            else
+            {
+                ERRORLOG("failed to load mod level lua script for %s", mod_item->name);
+            }
+        }
+    }
+
+    return result;
+}
+
+static void open_lua_script_for_mod_list(lua_State* L, LevelNumber lvnum, const struct ModConfigItem *mod_items, long mod_cnt)
+{
+    for (long i=0; i<mod_cnt; i++)
+    {
+        const struct ModConfigItem *mod_item = mod_items + i;
+        if (open_lua_script_for_mod(L, lvnum, mod_item))
+        {
+            // If lua_on_start_for_mod_list has performance issues, a variable can be used to record the state here.
+        }
+    }
+}
+
+static void open_lua_script_for_mod_all(lua_State* L, LevelNumber lvnum)
+{
+    if (mods_conf.after_base_cnt > 0)
+    {
+        open_lua_script_for_mod_list(L, lvnum, mods_conf.after_base_item, mods_conf.after_base_cnt);
+    }
+
+    if (mods_conf.after_campaign_cnt > 0)
+    {
+        open_lua_script_for_mod_list(L, lvnum, mods_conf.after_campaign_item, mods_conf.after_campaign_cnt);
+    }
+
+    if (mods_conf.after_map_cnt > 0)
+    {
+        open_lua_script_for_mod_list(L, lvnum, mods_conf.after_map_item, mods_conf.after_map_cnt);
+    }
+}
+
+
+/* @comment
+ *     The loading items of open_lua_script and open_lua_script_for_mod need to be consistent.
+ */
 TbBool open_lua_script(LevelNumber lvnum)
 {
-	Lvl_script = luaL_newstate();
+    Lvl_script = luaL_newstate();
 
-	luaL_openlibs(Lvl_script);
-	lua_set_random_seed(game.action_random_seed);
+    luaL_openlibs(Lvl_script);
+    disable_lua_functions(Lvl_script);
 
-	reg_host_functions(Lvl_script);
+    lua_set_random_seed(game.action_random_seed);
+
+    reg_host_functions(Lvl_script);
 
     setLuaPath(Lvl_script);
-    
+
     char* fname = prepare_file_fmtpath(FGrp_FxData, "lua/init.lua");
 
-	// Load and parse the Lua File
+    // Load and parse the Lua File
     if ( !LbFileExists(fname) )
     {
         ERRORLOG("file %s missing",fname);
         return false;
     }
-	if(!CheckLua(Lvl_script, luaL_dofile(Lvl_script, fname),"global_lua_file"))
-	{
+    if(!CheckLua(Lvl_script, luaL_dofile(Lvl_script, fname), "global_lua_file"))
+    {
         ERRORLOG("failed to load global lua script");
         close_lua_script();
         return false;
-	}
+    }
 
     fname = prepare_file_fmtpath(FGrp_CmpgConfig, "lua/init.lua");
     if (LbFileExists(fname))
@@ -198,15 +332,16 @@ TbBool open_lua_script(LevelNumber lvnum)
 
     short fgroup = get_level_fgroup(lvnum);
     fname = prepare_file_fmtpath(fgroup, "map%05lu.lua", (unsigned long)lvnum);
-	// Load and parse the Lua File
-    if ( !LbFileExists(fname) )
-      return false;
+    // Load and parse the Lua File
+    if (LbFileExists(fname) )
+    {
+        if(!CheckLua(Lvl_script, luaL_dofile(Lvl_script, fname), "level_script_loading"))
+        {
+            ERRORLOG("failed to load level lua script");
+        }
+    }
 
-    if(!CheckLua(Lvl_script, luaL_dofile(Lvl_script, fname),"level_script_loading"))
-	{
-        ERRORLOG("failed to load lua script");
-        return false;
-	}
+    open_lua_script_for_mod_all(Lvl_script, lvnum);
 
     return true;
 }
@@ -251,25 +386,22 @@ const char* lua_get_serialised_data(size_t *len)
 }
 
 
-void lua_set_serialised_data(const char *data, size_t len)
+TbBool lua_set_serialised_data(const char *data, size_t len)
 {
-	if(Lvl_script == NULL)
-	{
-		ERRORLOG("Lvl_script not initialised");
-		return;
-	}
+    if (Lvl_script == NULL) {
+        ERRORLOG("Lvl_script not initialised");
+        return false;
+    }
 
     lua_getglobal(Lvl_script, "SetSerializedData");
-	if (lua_isfunction(Lvl_script, -1))
-	{
-		lua_pushlstring(Lvl_script, data, len);
-		CheckLua(Lvl_script, lua_pcall(Lvl_script, 1, 0, 0),"SetSerializedData");
-	}
-	else
-	{
-		ERRORLOG("failed to find SetSerializedData lua function");
-        lua_pop(Lvl_script, 1);  // Pop nil
-	}
+    if (!lua_isfunction(Lvl_script, -1)) {
+        ERRORLOG("failed to find SetSerializedData lua function");
+        lua_pop(Lvl_script, 1);
+        return false;
+    }
+
+    lua_pushlstring(Lvl_script, data, len);
+    return CheckLua(Lvl_script, lua_pcall(Lvl_script, 1, 0, 0), "SetSerializedData");
 }
 
 void cleanup_serialized_data() {
@@ -335,6 +467,8 @@ void generate_lua_types_file()
     GENERATE_ALIAS("effect_type", effect_desc);
     GENERATE_ALIAS("spell_type", spell_desc);
     GENERATE_ALIAS("slab_type", slab_desc);
+    GENERATE_ALIAS("creature_state", creatrstate_desc);
+    GENERATE_ALIAS("shot_type", shot_desc);
     fprintf(out, "\n");
 
     GENERATE_FIELDS("roomfields", room_desc);

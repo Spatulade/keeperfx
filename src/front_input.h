@@ -97,6 +97,19 @@ enum GameKeys {
     Gkey_LVShowAllEnsigns,
     Gkey_LVNextLevel,
     Gkey_LVPrevLevel,
+    Gkey_NextInstance,
+    Gkey_PrevInstance,
+    Gkey_ButtonSnapLeft,
+    Gkey_ButtonSnapRight,
+    Gkey_ButtonSnapUp,
+    Gkey_ButtonSnapDown,
+    Gkey_PauseMenu,
+    Gkey_LeftClick,
+    Gkey_RightClick,    
+    Gkey_MouseUp,
+    Gkey_MouseDown,
+    Gkey_MouseLeft,
+    Gkey_MouseRight,
     GAME_KEYS_COUNT
 };
 
@@ -127,40 +140,51 @@ struct GuiLayer {
     long current_gui_layer;
 };
 
-struct GuiMenu;
-struct GuiButton;
-
 struct GamekeySettings {
     const char* toml_name;
     TextStringId string_id; // For display in the key binding menu
     uint8_t default_code;
     uint8_t default_mods;
+    TbControllerButtons default_controller_buttons;
     uint8_t binding_menu_visibility;
 
 };
 
 extern const struct GamekeySettings game_key_settings[GAME_KEYS_COUNT];
 
+enum ZoomToMouseOptions
+{
+    ZoomToMouse_Never = 1,
+    ZoomToMouse_Wheel = 2,
+    ZoomToMouse_Always = 3
+};
+extern enum ZoomToMouseOptions zoom_to_mouse_option;
+
+enum RotateAroundMouseOptions
+{
+    RotateAroundMouse_Never = 1,
+    RotateAroundMouse_RotationKeys = 2,
+    RotateAroundMouse_MovementKeys = 3,
+    RotateAroundMouse_Always = 4
+};
+extern enum RotateAroundMouseOptions rotate_around_mouse_option;
+
 #pragma pack()
 /******************************************************************************/
 extern long old_mx;
 extern long old_my;
-extern int synthetic_left;
-extern int synthetic_right;
 /******************************************************************************/
 void input(void);
-short get_inputs(void);
 short get_screen_capture_inputs(void);
-int is_game_key_pressed(long key_id, int32_t *val, TbBool ignore_mods);
+int is_game_key_pressed(long key_id, TbBool clear_pressed, TbBool ignore_mods);
 short game_is_busy_doing_gui_string_input(void);
 short get_gui_inputs(short gameplay_on);
 extern unsigned short const zoom_key_room_order[];
-TbBool check_if_mouse_is_over_button(const struct GuiButton *gbtn);
-long get_current_gui_layer();
 TbBool check_current_gui_layer(long layer_id);
-void process_cheat_mode_selection_inputs();
 TbBool process_cheat_heart_health_inputs(HitPoints *value, HitPoints max_health);
-void disable_packet_mode();
+TbControllerButtons get_game_key_controller_buttons(long key_id);
+float get_game_key_axis_value(long key_id, TbBool ignore_mods);
+
 /******************************************************************************/
 #ifdef __cplusplus
 }

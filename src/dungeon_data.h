@@ -206,7 +206,6 @@ struct Dungeon {
     int manage_score;
     int total_score;
     uint32_t max_gameplay_score;
-    short times_breached_dungeon;
     short highest_task_number;
     GoldAmount total_money_owned;
     GoldAmount offmap_money_owned;
@@ -237,7 +236,6 @@ struct Dungeon {
     struct DiggerStack digger_stack[DIGGER_TASK_MAX_COUNT];
     uint32_t digger_stack_update_turn;
     uint32_t digger_stack_length;
-    unsigned char visible_event_idx;
     /** Array with battle indexes with the battles currently visible in fight event message */
     unsigned char visible_battles[3];
     short zoom_annoyed_creature_idx;

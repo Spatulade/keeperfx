@@ -17,6 +17,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include "kfx/renderer/RendererManager.h"
 #include "gui_topmsg.h"
 
 #include <stdarg.h>
@@ -104,7 +105,7 @@ TbBool erstat_check(void)
     if (sdiff != 0)
     {
 #if (BFDEBUG_LEVEL > 0)
-        show_onscreen_msg(game_num_fps,"%s, %ld occurrences",erstat[stat_num].msg,sdiff);
+        show_onscreen_msg(turns_per_second,"%s, %ld occurrences",erstat[stat_num].msg,sdiff);
 #else
         WARNLOG("%s, %d occurrences",erstat[stat_num].msg,sdiff);
 #endif
@@ -122,7 +123,7 @@ TbBool draw_onscreen_direct_messages(void)
 {
     SYNCDBG(5,"Starting");
     int tx_units_per_px;
-    if (dbc_language > 0)
+    if (dbc_initialized && dbc_enabled)
     {
         tx_units_per_px = scale_value_by_horizontal_resolution((MyScreenWidth >= 640) ? 16 : 32);
     }
@@ -131,7 +132,7 @@ TbBool draw_onscreen_direct_messages(void)
         tx_units_per_px = scale_ui_value_lofi(16);
     }
     // Display in-game message for debug purposes
-    lbDisplay.DrawFlags = Lb_TEXT_HALIGN_LEFT;
+    RendererSetDrawFlags(Lb_TEXT_HALIGN_LEFT);
     if ((render_onscreen_msg_time > 0.0) || erstat_check())
     {
         if (LbScreenIsLocked())

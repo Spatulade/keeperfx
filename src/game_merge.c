@@ -41,7 +41,7 @@ unsigned long game_flags2 = 0;
 TbBool emulate_integer_overflow(unsigned short nbits)
 {
     if (nbits == 8)
-        return (game.conf.rules[0].game.classic_bugs_flags & ClscBug_Overflow8bitVal) != 0;
+        return (game.conf.rules[0].gameplay.classic_bugs_flags & ClscBug_Overflow8bitVal) != 0;
     return false;
 }
 
@@ -210,6 +210,53 @@ void update_extra_levels_visibility(void)
 {
 }
 
+struct LevelEnsignOverride *get_level_ensign_override(LevelNumber lvnum)
+{
+    for (int i = 0; i < CAMPAIGN_LEVELS_COUNT; i++)
+    {
+        struct LevelEnsignOverride *override = &intralvl.ensign_overrides[i];
+        if (override->lvnum == lvnum)
+        {
+            return override;
+        }
+    }
+
+    return NULL;
+}
+
+TbBool update_or_create_level_ensign_override(LevelNumber lvnum, short ensign_type)
+{
+    struct LevelEnsignOverride *override = get_level_ensign_override(lvnum);
+    if (override != NULL)
+    {        
+        if(ensign_type == -1){
+            memset(override, 0, sizeof(*override));
+        } else {
+            override->ensign_type = ensign_type;
+        }
+        return true;
+    }
+
+    for (int i = 0; i < CAMPAIGN_LEVELS_COUNT; i++)
+    {
+        override = &intralvl.ensign_overrides[i];
+
+        if (!override->active)
+        {
+            struct LevelInformation *lvinfo = get_level_info(lvnum);
+
+            if (lvinfo == NULL)
+                return false;
+
+            override->lvnum = lvnum;
+            override->ensign_type = ensign_type;
+            override->active = true;
+            
+            return true;
+        }
+    }
+    return true;
+}
 /******************************************************************************/
 #ifdef __cplusplus
 }

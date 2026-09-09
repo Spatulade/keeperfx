@@ -48,11 +48,15 @@ PKG_MAPPACK_FILES = \
 	$(patsubst %,pkg/%,$(foreach mappack,$(MAPPACKS),$(wildcard levels/$(mappack)_cfgs/*.cfg))) \
 	$(patsubst %,pkg/%,$(foreach mappack,$(MAPPACKS),$(wildcard levels/$(mappack)_cfgs/*.toml)))
 PKG_MAPPACK_DIRS = $(sort $(dir $(PKG_MAPPACK_FILES)))
+PKG_MP_MAPPACK_FILES := $(patsubst multiplayer/%,pkg/multiplayer/%,$(shell find multiplayer -type f))
+PKG_MP_MAPPACK_DIRS = $(sort $(dir $(PKG_MP_MAPPACK_FILES)))
 PKG_BIN = pkg/$(notdir $(BIN))
 PKG_BIN_MAP = $(PKG_BIN:%.exe=%.map)
 PKG_HVLOGBIN = pkg/$(notdir $(HVLOGBIN))
 PKG_HVLOGBIN_MAP = $(PKG_HVLOGBIN:%.exe=%.map)
-PKG_DOCS = pkg/keeperfx_readme.txt
+PKG_DOCS = \
+	pkg/keeperfx_readme.txt \
+	pkg/launcher-auto-file-removal.txt
 PKG_DLL = \
 	pkg/SDL2_net.dll \
 	pkg/SDL2_mixer.dll \
@@ -64,6 +68,7 @@ PKG_FILES = \
 	$(PKG_FXDATA_FILES) \
 	$(PKG_MOD_FILES) \
 	$(PKG_MAPPACK_FILES) \
+	$(PKG_MP_MAPPACK_FILES) \
 	$(NGTEXTDATS) \
 	$(NCTEXTDATS) \
 	$(MPTEXTDATS) \
@@ -75,9 +80,18 @@ PKG_FILES = \
 	$(PKG_DOCS) \
 	$(PKG_DLL)
 
-.PHONY: package
+# Everything except the binaries, their linker maps, and the SDL runtime DLLs.
+# When packaging with CMake/CPack the binaries and the SDL DLLs come from the
+# CMake build (see build/cmake/modules/Packaging.cmake and deps/CMakeLists.txt),
+# so "pkg-assemble" stages only the game data (configs, campaigns, levels,
+# language/sound .dat files, docs) into pkg/ for CPack to archive.
+PKG_DATA_FILES = $(filter-out \
+	$(PKG_BIN) $(PKG_BIN_MAP) $(PKG_HVLOGBIN) $(PKG_HVLOGBIN_MAP) $(PKG_DLL), \
+	$(PKG_FILES))
 
-pkg pkg/creatrs pkg/fxdata pkg/campgns pkg/fxdata/lua $(PKG_MAPPACK_DIRS) $(PKG_CAMPAIGN_DIRS) $(PKG_FXDATA_DIRS) $(PKG_MOD_DIRS):
+.PHONY: package pkg-assemble
+
+pkg pkg/creatrs pkg/fxdata pkg/campgns pkg/fxdata/lua $(PKG_MAPPACK_DIRS) $(PKG_MP_MAPPACK_DIRS)  $(PKG_CAMPAIGN_DIRS) $(PKG_FXDATA_DIRS) $(PKG_MOD_DIRS):
 	$(MKDIR) $@
 	
 pkg/fxdata/lua/%.lua: config/fxdata/lua/%.lua
@@ -142,6 +156,9 @@ pkg/levels/%.cfg: levels/%.cfg | $(PKG_MAPPACK_DIRS)
 pkg/levels/%.txt: levels/%.txt | $(PKG_MAPPACK_DIRS)
 	$(CP) $^ $@
 
+pkg/multiplayer/%: multiplayer/% | $(PKG_MP_MAPPACK_DIRS)
+	$(CP) $< $@
+
 pkg/SDL2_net.dll: sdl/for_final_package/SDL2_net.dll | pkg
 	$(CP) $^ $@
 
@@ -158,6 +175,12 @@ $(PKG_NAME): $(PKG_FILES) | pkg
 	$(RM) $@ && cd $(dir $(PKG_NAME)) && 7z a $(notdir $(PKG_NAME)) $(patsubst pkg/%,%,$^) >/dev/null
 
 package: $(PKG_NAME)
+
+# Stage the game data into pkg/ without building the .7z. Used by the CMake
+# packaging flow: run this, then "cmake --build --target package" (CPack) adds
+# the CMake-built keeperfx.exe and creates the archive.
+pkg-assemble: $(PKG_DATA_FILES)
+	@echo "Game data assembled into pkg/ - run 'cmake --build --target package' to create the archive"
 
 clean-package:
 	$(RM) -r pkg

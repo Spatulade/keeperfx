@@ -73,6 +73,7 @@ enum EventKinds {
 enum EventFlags {
     EvF_Exists       = 0x0001,
     EvF_BtnFirstFall = 0x0002, /*< Informs whether the button is falling for a first time. */
+    EvF_BtnFalling   = 0x0004,
 };
 
 /******************************************************************************/
@@ -91,7 +92,9 @@ struct Event {
     unsigned char kind;
     int32_t target;
     /** Button lifespan, decreased over time. When reaches 0, the button disappears. */
-    unsigned long lifespan_turns;
+    uint32_t lifespan_turns;
+    /** Custom button icon sprite index; -1 uses the default event icon. */
+    short icon_idx;
 };
 
 struct Bookmark {
@@ -122,7 +125,6 @@ void event_add_to_event_buttons_list_or_replace_button(struct Event *event, stru
 void event_update_on_battle_removal(BattleIndex battle_idx);
 void event_delete_event(long plridx, EventIndex evidx);
 void event_update_last_use(struct Event *event);
-void go_on_then_activate_the_event_box(PlayerNumber plyr_idx, EventIndex evidx);
 void clear_events(void);
 void remove_events_thing_is_attached_to(struct Thing *thing);
 struct Thing *event_is_attached_to_thing(EventIndex evidx);

@@ -18,6 +18,7 @@
 /******************************************************************************/
 #include "pre_inc.h"
 #include "power_specials.h"
+#include "api.h"
 
 #include "globals.h"
 #include "bflib_basics.h"
@@ -361,6 +362,9 @@ void make_safe(struct PlayerInfo *player)
     SlabCodedCoords* slblist = (SlabCodedCoords*)(big_scratch + game.map_tiles_x * game.map_tiles_y);
     unsigned int list_len = 0;
     unsigned int list_cur = 0;
+    struct Room* room_list[ROOMS_COUNT + 1];
+    memset(room_list, 0, sizeof(room_list));
+
     while (list_cur <= list_len)
     {
         SlabCodedCoords slb_num;
@@ -377,7 +381,7 @@ void make_safe(struct PlayerInfo *player)
                 {
                     unsigned char pretty_type = choose_pretty_type(plyr_idx, slb_x - 1, slb_y);
                     place_slab_type_on_map(pretty_type, slab_subtile(slb_x-1,0), slab_subtile(slb_y,0), plyr_idx, 0);
-                    do_slab_efficiency_alteration(slb_x-1, slb_y);
+                    collect_rooms_around_slab(slb_x-1, slb_y, room_list, sizeof(room_list)/sizeof(room_list[0]));
                     fill_in_reinforced_corners(plyr_idx, slb_x-1, slb_y);
                 }
             } else
@@ -400,7 +404,7 @@ void make_safe(struct PlayerInfo *player)
                 {
                     unsigned char pretty_type = choose_pretty_type(plyr_idx, slb_x + 1, slb_y);
                     place_slab_type_on_map(pretty_type, slab_subtile(slb_x+1,0), slab_subtile(slb_y,0), plyr_idx, 0);
-                    do_slab_efficiency_alteration(slb_x+1, slb_y);
+                    collect_rooms_around_slab(slb_x+1, slb_y, room_list, sizeof(room_list)/sizeof(room_list[0]));
                     fill_in_reinforced_corners(plyr_idx, slb_x+1, slb_y);
                 }
             } else
@@ -423,7 +427,7 @@ void make_safe(struct PlayerInfo *player)
                 {
                     unsigned char pretty_type = choose_pretty_type(plyr_idx, slb_x, slb_y - 1);
                     place_slab_type_on_map(pretty_type, slab_subtile(slb_x,0), slab_subtile(slb_y-1,0), plyr_idx, 0);
-                    do_slab_efficiency_alteration(slb_x, slb_y-1);
+                    collect_rooms_around_slab(slb_x, slb_y-1, room_list, sizeof(room_list)/sizeof(room_list[0]));
                     fill_in_reinforced_corners(plyr_idx, slb_x, slb_y-1);
                 }
             } else
@@ -446,7 +450,7 @@ void make_safe(struct PlayerInfo *player)
                 {
                     unsigned char pretty_type = choose_pretty_type(plyr_idx, slb_x, slb_y + 1);
                     place_slab_type_on_map(pretty_type, slab_subtile(slb_x,0), slab_subtile(slb_y+1,0), plyr_idx, 0);
-                    do_slab_efficiency_alteration(slb_x, slb_y+1);
+                    collect_rooms_around_slab(slb_x, slb_y+1, room_list, sizeof(room_list)/sizeof(room_list[0]));
                     fill_in_reinforced_corners(plyr_idx, slb_x, slb_y+1);
                 }
             } else
@@ -462,6 +466,7 @@ void make_safe(struct PlayerInfo *player)
         slb_y = slb_num_decode_y(slblist[list_cur]);
         list_cur++;
     }
+    recalculate_rooms_in_list(room_list, sizeof(room_list)/sizeof(room_list[0]));
     panel_map_update(0, 0, game.map_subtiles_x+1, game.map_subtiles_y+1);
 }
 
@@ -475,6 +480,9 @@ void make_unsafe(PlayerNumber plyr_idx)
     struct PowerConfigStats* powerst;
     struct Dungeon* dungeon;
     struct Coord3d pos;
+    struct Room* room_list[ROOMS_COUNT + 1];
+    memset(room_list, 0, sizeof(room_list));
+
     for (slb_y = 0; slb_y < game.map_tiles_y; slb_y++)
     {
         for (slb_x = 0; slb_x < game.map_tiles_x; slb_x++)
@@ -495,11 +503,12 @@ void make_unsafe(PlayerNumber plyr_idx)
                     powerst = get_power_model_stats(PwrK_DESTRWALLS);
                     play_sound_if_close_to_receiver(&pos, powerst->select_sound_idx);
                     place_slab_type_on_map(newslab, slab_subtile_center(slb_x), slab_subtile_center(slb_y), game.neutral_player_num, 0);
-                    do_slab_efficiency_alteration(slb_x, slb_y);
+                    collect_rooms_around_slab(slb_x, slb_y, room_list, sizeof(room_list)/sizeof(room_list[0]));
                 }
             }
         }
     }
+    recalculate_rooms_in_list(room_list, sizeof(room_list)/sizeof(room_list[0]));
     panel_map_update(0, 0, game.map_subtiles_x + 1, game.map_subtiles_y + 1);
 }
 
@@ -519,6 +528,22 @@ void activate_dungeon_special(struct Thing *cratetng, struct PlayerInfo *player)
     TbBool no_speech = false;
     if (thing_exists(cratetng) && thing_is_special_box(cratetng))
     {
+        
+    struct ApiEventData event_data[] = {
+        { .name = "player", .type = API_EVENT_DATA_INT32, .value.int32_value = player->id_number },
+        { .name = "special", .type = API_EVENT_DATA_INT32, .value.int32_value = spkindidx },
+        { .name = "special_name", .type = API_EVENT_DATA_STRING, .value.string_value = specst->code_name },
+        { .name = "special_value", .type = API_EVENT_DATA_INT32, .value.int32_value = specst->value },
+        { .name = "thing", .type = API_EVENT_DATA_INT32, .value.int32_value = cratetng->index },
+        { .name = "model", .type = API_EVENT_DATA_INT32, .value.int32_value = cratetng->model },
+        { .name = "x", .type = API_EVENT_DATA_INT32, .value.int32_value = cratetng->mappos.x.val >> 8},
+        { .name = "y", .type = API_EVENT_DATA_INT32, .value.int32_value = cratetng->mappos.y.val >> 8 },
+        { .name = "z", .type = API_EVENT_DATA_INT32, .value.int32_value = cratetng->mappos.z.val >> 8 },
+        { .name = "level_number", .type = API_EVENT_DATA_INT32, .value.int32_value = get_loaded_level_number() },
+        { .name = "game_turn", .type = API_EVENT_DATA_UINT64, .value.uint64_value = (uint64_t)get_gameturn() },
+    };
+    api_event_with_data("SPECIAL_ACTIVATED", event_data, sizeof(event_data) / sizeof(event_data[0]));
+
     switch (spkindidx)
     {
         case SpcKind_RevealMap:
@@ -631,7 +656,7 @@ void activate_dungeon_special(struct Thing *cratetng, struct PlayerInfo *player)
         {
             if (is_my_player(player) && !no_speech)
             {
-                output_message(specst->speech, 0);
+                play_speech_ref(&specst->speech, 0);
             }
             create_used_effect_or_element(&pos, specst->effect_id, player->id_number, cratetng->index);
         }
@@ -660,7 +685,7 @@ void resurrect_creature(struct Thing *boxtng, PlayerNumber owner, ThingModel crm
     create_used_effect_or_element(&boxtng->mappos, specst->effect_id, owner, boxtng->index);
     remove_events_thing_is_attached_to(boxtng);
     force_any_creature_dragging_owned_thing_to_drop_it(boxtng);
-    if ((game.conf.rules[owner].game.classic_bugs_flags & ClscBug_ResurrectForever) == 0) {
+    if ((game.conf.rules[owner].gameplay.classic_bugs_flags & ClscBug_ResurrectForever) == 0) {
         remove_item_from_dead_creature_list(get_players_num_dungeon(owner), crmodel, exp_level);
     }
     delete_thing_structure(boxtng, 0);

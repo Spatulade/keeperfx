@@ -27,7 +27,14 @@ extern "C" {
 #endif
 /******************************************************************************/
 #define CAMPAIGN_SAVE_SLOTS_COUNT 8
-#define TOTAL_SAVE_SLOTS_COUNT    8
+/* Savegames are individual files fx1gNNNN.sav. The in-memory catalogue
+ * (save_game_catalogue) grows dynamically to hold exactly the saves that exist plus
+ * one free slot to save into, so the only real limit is disk space, there is no fixed
+ * slot count. SAVE_SLOTS_LIMIT is only a sanity ceiling matching the fx1g%04d filename
+ * range (0-9999).
+ */
+#define SAVE_SLOTS_LIMIT         10000
+#define SAVE_SLOTS_MIN           8
 #define SAVE_TEXTNAME_LEN        30
 #define PLAYER_NAME_LENGTH       64
 
@@ -97,7 +104,8 @@ extern const short VersionMajor;
 extern const short VersionMinor;
 extern short const VersionRelease;
 extern short const VersionBuild;
-extern struct CatalogueEntry save_game_catalogue[];
+extern struct CatalogueEntry *save_game_catalogue;
+extern long save_game_catalogue_count;
 /******************************************************************************/
 int load_game_chunks(TbFileHandle fhandle,struct CatalogueEntry *centry);
 TbBool fill_game_catalogue_entry(struct CatalogueEntry *centry,const char *textname);
@@ -123,7 +131,6 @@ LevelNumber move_campaign_to_prev_level(void);
 TbBool continue_game_available(void);
 short load_continue_game(void);
 short save_continue_game(LevelNumber lv_num);
-short read_continue_game_part(unsigned char *buf,long pos,long buf_len);
 /******************************************************************************/
 #ifdef __cplusplus
 }

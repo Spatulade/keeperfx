@@ -5232,7 +5232,17 @@ msgctxt "Menu interface item"
 msgid "Lost Levels"
 msgstr ""
 
-#: guitext:976 guitext:977 guitext:978 guitext:979 guitext:980
+#: guitext:976
+msgctxt "Menu interface item"
+msgid "Modern Levels"
+msgstr ""
+
+#: guitext:977
+msgctxt "Menu interface item"
+msgid "Bullfrog Levels"
+msgstr ""
+
+#: guitext:978 guitext:979 guitext:980
 msgctxt "Unused"
 msgid "Moo3"
 msgstr ""
@@ -5454,7 +5464,7 @@ msgstr ""
 
 #: guitext:1024
 msgctxt "Menu interface item"
-msgid "Good Campaign"
+msgid "The Good Guys"
 msgstr ""
 
 #: guitext:1025
@@ -5827,4 +5837,67 @@ msgctxt "Game controls"
 msgid "Teleport Default"
 msgstr ""
 
+#: guitext:1110
+msgctxt "Menu interface item"
+msgid "Multiplayer Map Packs"
+msgstr ""
 
+#: guitext:1111
+msgctxt "Menu interface item"
+msgid "Return to Lobby"
+msgstr ""
+
+#: guitext:1112
+msgctxt "In-game message"
+msgid "You have been defeated. As host, keep the game running until the match concludes."
+msgstr ""
+
+#: guitext:1113
+msgctxt "Network game message"
+msgid "Verify /fxdata/ is the same across all PCs."
+msgstr ""
+
+#: guitext:1114
+msgctxt "Network game message"
+msgid "WARNING: Custom sprite mismatch with %s!"
+msgstr ""
+
+#: guitext:1115
+msgctxt "Network game message"
+msgid "I am the computer now!"
+msgstr ""
+
+#: guitext:1116
+msgctxt "Network game message"
+msgid "%s has left the game."
+msgstr ""
+
+#: guitext:1117
+msgctxt "Network game message"
+msgid "%s has disconnected."
+msgstr ""
+
+#: guitext:1118
+msgctxt "Unused"
+msgid "unused"
+msgstr ""
+
+#: guitext:1119
+msgctxt "Network game message"
+msgid "Network connection to host lost"
+msgstr ""
+
+#: guitext:1120
+msgctxt "In-game message"
+msgid "/fxdata/%.39s was not loaded."
+msgstr ""
+
+#: guitext:1121
+msgctxt "In-game message"
+msgid "Please install it as a mod inside the /mods/ folder."
+msgstr ""
+
+#: guitext:1122
+msgctxt "Network game message"
+msgid "Lost connection to server"
+msgstr ""

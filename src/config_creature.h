@@ -64,6 +64,10 @@ enum CreatureModelFlags {
     CMF_PreferSteal       = 0x040000, // The creature can be generated from Steal Hero special if there's nothing to steal.
     CMF_EventfulDeath     = 0x080000, // The LAST_DEATH_EVENT[] script location is updated on death.
     CMF_IsDiggingCreature = 0x100000, // unit still counts as a regular creature but can also do digger tasks (like tunneler)
+    CMF_NoHealthFlower    = 0x200000, // Do not draw the health/status flower above the creature.
+    CMF_CannotPickUp      = 0x400000, // Creature cannot be picked up by the hand.
+    CMF_DropOnPath        = 0x800000, // Creature can be dropped on unclaimed path
+    CMF_CannotPossess     = 0x1000000, // Creature cannot be possessed.
 };
 
 // Before C23 standard, we cannot specify the underlaying type (in this case we want 64bit int) of enum.
@@ -210,6 +214,7 @@ struct CreatureStateConfig {
     TbBool override_fight_door;
     TbBool override_call2arms;
     TbBool override_follow;
+    TbBool override_deep_work;
     unsigned char state_type;
     TbBool captive;
     TbBool transition;
@@ -342,7 +347,7 @@ struct CreatureModelConfig {
     unsigned short jobs_anger;
     short annoy_others_leaving;
     unsigned char slaps_to_kill;
-    ThingModel lair_enemy[LAIR_ENEMY_MAX];
+    ThingModel lair_enemy[CREATURE_TYPES_MAX];
     unsigned char rebirth;
     TbBool can_see_invisible;
     TbBool can_go_locked_doors;

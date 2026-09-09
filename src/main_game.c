@@ -12,6 +12,7 @@
  */
 /******************************************************************************/
 #include "pre_inc.h"
+#include "kfx/renderer/RendererManager.h"
 #include "keeperfx.hpp"
 
 #include "bflib_coroutine.h"
@@ -19,6 +20,7 @@
 #include "bflib_math.h"
 #include "bflib_sound.h"
 
+#include "ariadne_update.h"
 #include "config_compp.h"
 #include "config_settings.h"
 #include "creature_states_combt.h"
@@ -36,10 +38,13 @@
 #include "gui_topmsg.h"
 #include "gui_soundmsgs.h"
 #include "kjm_input.h"
+#include "config_sounds.h"
 #include "lvl_filesdk1.h"
 #include "lua_base.h"
 #include "lua_triggers.h"
+#include "net_exchange_common.h"
 #include "net_game.h"
+#include "frontmenu_ingame_evnt.h"
 #include "net_resync.h"
 #include "room_library.h"
 #include "room_list.h"
@@ -54,6 +59,7 @@
 #include "sounds.h"
 #include "api.h"
 #include "net_resync.h"
+#include "timer.h"
 
 #ifdef FUNCTESTING
   #include "ftests/ftest.h"
@@ -103,7 +109,7 @@ void reset_script_timers_and_flags(void)
     }
 }
 
-void init_player_types()
+static void init_player_types()
 {
     for (size_t plr_idx = 0; plr_idx < PLAYERS_COUNT; plr_idx++)
     {
@@ -127,9 +133,27 @@ void init_player_types()
     }
 }
 
+static void init_keepers_map_exploration(void)
+{
+    struct PlayerInfo *player;
+    int i;
+    for (i=0; i < PLAYERS_COUNT; i++)
+    {
+      player = get_player(i);
+      if ((player_exists(player) && (player->is_active == 1)) || player_is_roaming(i))
+      {
+          // Additional init - the main one is in init_player()
+          if ((player->allocflags & PlaF_CompCtrl) != 0) {
+              init_keeper_map_exploration_by_terrain(player);
+              init_keeper_map_exploration_by_creatures(player);
+          }
+      }
+    }
+}
+
 /******************************************************************************/
 
-static void init_level(void)
+static TbBool init_level(void)
 {
     SYNCDBG(6,"Starting");
     struct IntralevelData transfer_mem;
@@ -147,14 +171,22 @@ static void init_level(void)
     lens_mode = 0;
     setup_heap_manager();
 
+    wait_for_all_players();
     init_seeds();
     sync_initial_network_seed();
 
-    luascript_loaded = open_lua_script(get_selected_level_number());
-    // Load configs which may have per-campaign part, and can even be modified within a level
     recheck_all_mod_exist();
+
+    luascript_loaded = open_lua_script(get_selected_level_number());
+    // Restore campaign-layer sounds before creature configs load, so creature cfg custom
+    // sounds are added to the already-restored bank (not wiped afterwards).
+    sound_restore_to_campaign_snapshot();
+    // Load configs which may have per-campaign part, and can even be modified within a level
+    level_load_time_phase(LevelLoadTime_Sprites);
     init_custom_sprites(get_selected_level_number());
+    level_load_time_phase(LevelLoadTime_Configs);
     load_stats_files();
+    level_load_time_phase(LevelLoadTime_GameSetup);
     check_and_auto_fix_stats();
 
     // We should do this after 'load stats'
@@ -176,22 +208,22 @@ static void init_level(void)
     clear_messages();
     
     // Load the actual level files
-    TbBool script_preloaded = preload_script(get_selected_level_number());
-    if (!load_map_file(get_selected_level_number()))
-    {
-        // TODO: whine about missing file to screen
-        JUSTMSG("Unable to load level %u from %s", get_selected_level_number(), campaign.name);
-        return;
+    int level = get_selected_level_number();
+    level_load_time_phase(LevelLoadTime_Data);
+    TbBool script_preloaded = preload_script(level);
+    if (!load_map_file(level)) {
+        create_frontend_error_box(15000, "Map content is missing or incompatible.");
+        JUSTMSG("Unable to load level %d from %s", level, campaign.name);
+        return false;
     }
-    else
-    {
-        if (script_preloaded == false && luascript_loaded == false)
-        {
-            show_onscreen_msg(200,"%s: No Script %lu", get_string(GUIStr_Error), get_selected_level_number());
-            JUSTMSG("Unable to load script level %u from %s", get_selected_level_number(), campaign.name);
-        }
+    level_load_time_phase(LevelLoadTime_GameSetup);
+    if (!script_preloaded && !luascript_loaded) {
+        show_onscreen_msg(200,"%s: No Script %d", get_string(GUIStr_Error), level);
+        JUSTMSG("Unable to load script level %d from %s", level, campaign.name);
     }
+    level_load_time_phase(LevelLoadTime_Navigation);
     init_navigation();
+    level_load_time_phase(LevelLoadTime_GameSetup);
     snprintf(game.campaign_fname, sizeof(game.campaign_fname), "%s", campaign.fname);
     light_set_lights_on(1);
     {
@@ -215,6 +247,7 @@ static void init_level(void)
     game.armageddon_cast_turn = 0;
     game.armageddon_over_turn = 0;
     clear_messages();
+    show_ignored_fxdata_zip_messages();
     game.creatures_tend_imprison = 0;
     game.creatures_tend_flee = 0;
     memset(game.pay_day_progress, 0, sizeof(game.pay_day_progress));
@@ -229,6 +262,7 @@ static void init_level(void)
     JUSTMSG("Started level %u from %s", get_selected_level_number(), campaign.name);
 
     api_event("GAME_STARTED");
+    return true;
 }
 
 static void post_init_level(void)
@@ -259,17 +293,17 @@ static void post_init_level(void)
 
 /******************************************************************************/
 
-void startup_saved_packet_game(void)
+TbBool startup_saved_packet_game(void)
 {
     struct CatalogueEntry centry;
     clear_packets();
     open_packet_file_for_load(game.packet_fname,&centry);
-    if (!change_campaign(centry.campaign_fname))
+    if (!change_campaign(CampgnT_Default, centry.campaign_fname))
     {
         ERRORLOG("Unable to load campaign associated with packet file");
     }
     set_selected_level_number(game.packet_save_head.level_num);
-    lbDisplay.DrawColour = colours[15][15][15];
+    RendererSetDrawColour(colours[15][15][15]);
     game.pckt_gameturn = 0;
 #if (BFDEBUG_LEVEL > 0)
     SYNCDBG(0,"Initialising level %d", (int)get_selected_level_number());
@@ -303,9 +337,12 @@ void startup_saved_packet_game(void)
     IMPRISON_BUTTON_DEFAULT = game.packet_save_head.default_imprison_tendency;
     FLEE_BUTTON_DEFAULT = game.packet_save_head.default_flee_tendency;
     set_skip_heart_zoom_feature(game.packet_save_head.skip_heart_zoom);
-    init_level();
+    if (!init_level())
+        return false;
     setup_zombie_players();//TODO GUI What about packet file from network game? No zombies there..
     init_players();
+    get_my_player()->user_id = SOLO_HUMAN_ID;
+    init_user_state(get_my_player()->user_id);
     if (game.active_players_count == 1)
         game.game_kind = GKind_LocalGame;
     if (game.turns_stored < game.turns_fastforward)
@@ -315,6 +352,7 @@ void startup_saved_packet_game(void)
     set_selected_level_number(0);
     struct PlayerInfo* player = get_my_player();
     set_engine_view(player, rotate_mode_to_view_mode(game.packet_save_head.video_rotate_mode));
+    return true;
 }
 
 static CoroutineLoopState startup_network_game_tail(CoroutineLoop *context);
@@ -334,7 +372,10 @@ void startup_network_game(CoroutineLoop *context, TbBool local)
         game.local_plyr_idx = default_loc_player;
         my_player_number = default_loc_player;
     }
-    init_level();
+    if (!init_level()) {
+        coroutine_clear(context, true);
+        return;
+    }
     player = get_my_player();
     player->is_active = flgmem;
     //if (game.flagfield_14EA4A == 2) //was wrong because init_level sets this to 2. global variables are evil (though perhaps that's why they were chosen for DK? ;-))
@@ -349,7 +390,10 @@ void startup_network_game(CoroutineLoop *context, TbBool local)
     } else
     {
         game.game_kind = GKind_MultiGame;
-        init_players_network_game(context);
+        if (!init_players_network_game()) {
+            coroutine_clear(context, true);
+            return;
+        }
     }
     setup_count_players(); // It is reset by init_level
     int args[COROUTINE_ARGS] = {ShouldAssignCpuKeepers, 0};
@@ -361,6 +405,7 @@ static CoroutineLoopState startup_network_game_tail(CoroutineLoop *context)
     TbBool ShouldAssignCpuKeepers = coroutine_args(context)[0];
     if (game.game_kind == GKind_MultiGame) {
         setup_alliances();
+        are_disconnect_victories_allowed();
     }
     if (fe_computer_players || ShouldAssignCpuKeepers)
     {
@@ -394,32 +439,21 @@ void faststartup_network_game(CoroutineLoop *context)
     game.game_kind = GKind_LocalGame;
     if (!is_campaign_loaded())
     {
-        if (!change_campaign(""))
+        if (!change_campaign(CampgnT_Default,""))
             ERRORLOG("Unable to load campaign");
     }
     player = get_my_player();
     player->is_active = 1;
     startup_network_game(context, true);
-    coroutine_add(context, &set_not_has_quit);
+    if (!context->error)
+        coroutine_add(context, &set_not_has_quit);
 }
 
 CoroutineLoopState set_not_has_quit(CoroutineLoop *context)
 {
+    level_load_time_phase(LevelLoadTime_Total);
     get_my_player()->display_flags &= ~PlaF6_PlyrHasQuit;
     return CLS_CONTINUE;
-}
-
-void faststartup_saved_packet_game(void)
-{
-    reenter_video_mode();
-    startup_saved_packet_game();
-    {
-        struct PlayerInfo *player;
-        player = get_my_player();
-        player->display_flags &= ~PlaF6_PlyrHasQuit;
-    }
-    set_gui_visible(false);
-    clear_flag(game.operation_flags, GOF_ShowPanel);
 }
 
 /******************************************************************************/
@@ -442,10 +476,10 @@ void clear_complete_game(void)
         set_selected_level_number(start_params.selected_level_number);
     else
         set_selected_level_number(first_singleplayer_level());
-    game_num_fps = start_params.num_fps;
-    game_num_fps_draw_current = 0;
-    game_num_fps_draw_main = start_params.num_fps_draw_main;
-    game_num_fps_draw_secondary = start_params.num_fps_draw_secondary;
+    turns_per_second = start_params.num_fps;
+    fps_limit_current = 0;
+    fps_limit_main = start_params.num_fps_draw_main;
+    fps_limit_secondary = start_params.num_fps_draw_secondary;
     game.mode_flags = start_params.mode_flags;
     game.easter_eggs_enabled = start_params.easter_egg;
     set_flag_value(game.system_flags, GSF_AllowOnePlayer, start_params.one_player);

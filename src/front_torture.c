@@ -20,8 +20,7 @@
 /******************************************************************************/
 #include "pre_inc.h"
 #include "front_torture.h"
-#include "bflib_network.h"
-#include "bflib_network_exchange.h"
+#include "net_lobby.h"
 #include "globals.h"
 #include "bflib_basics.h"
 #include "config_settings.h"
@@ -30,6 +29,7 @@
 #include "bflib_filelst.h"
 #include "bflib_dernc.h"
 #include "bflib_keybrd.h"
+#include "bflib_datetm.h"
 #include "bflib_video.h"
 #include "bflib_vidraw.h"
 #include "bflib_mouse.h"
@@ -62,11 +62,15 @@ static long torture_sprite_frame;
 static long torture_door_selected;
 static struct DoorSoundState door_sound_state[TORTURE_DOORS_COUNT];
 static struct TortureState torture_state;
+static TbClockMSec torture_idle_start;
+static TbClockMSec torture_screen_start;
 static unsigned char *torture_background;
 static unsigned char *torture_palette;
 extern struct DoorDesc doors[TORTURE_DOORS_COUNT];
 extern struct TbSpriteSheet *fronttor_sprites;
 long torture_doors_available = TORTURE_DOORS_COUNT;
+#define TORTURE_MULTIPLAYER_IDLE_TIMEOUT 10000
+#define TORTURE_MULTIPLAYER_MAX_TIME 45000
 /******************************************************************************/
 #ifdef __cplusplus
 }
@@ -168,6 +172,8 @@ void fronttorture_load(void)
         LbMouseChangeSpriteAndHotspot(0, 0, 0);
     }
     torture_left_button = 0;
+    torture_idle_start = LbTimerClock();
+    torture_screen_start = torture_idle_start;
 }
 
 TbBool fronttorture_draw(void)
@@ -211,10 +217,10 @@ void fronttorture_input(void)
 {
     long x;
     long y;
-    PlayerNumber plyr_idx;
+    NetUserId user;
     clear_packets();
     struct PlayerInfo* player = get_my_player();
-    struct Packet* pckt = get_packet(my_player_number);
+    struct Packet* pckt = get_local_packet();
     // Get inputs and create packet
     if (player->victory_state == VicS_WonLevel)
     {
@@ -237,36 +243,46 @@ void fronttorture_input(void)
         pckt->actn_par1 = GetMouseX();
         pckt->actn_par2 = GetMouseY();
     }
-    // Exchange packet with other players
-    if ((game.system_flags & GSF_NetworkActive) != 0)
+    if (network_is_active())
     {
-        if (LbNetwork_Exchange(NETMSG_FRONTEND, pckt, game.packets, sizeof(struct Packet)))
+        TbClockMSec now = LbTimerClock();
+        if (now - torture_idle_start >= TORTURE_MULTIPLAYER_IDLE_TIMEOUT)
+        {
+            pckt->action |= 0x01;
+        }
+        if (now - torture_screen_start >= TORTURE_MULTIPLAYER_MAX_TIME)
+        {
+            pckt->action |= 0x01;
+        }
+    }
+    // Exchange packet with other players
+    if (network_is_active())
+    {
+        if (LbNetwork_ExchangeFrontend(pckt, game.packets, sizeof(struct Packet)))
             ERRORLOG("LbNetwork_Exchange failed");
     }
-    // Determine the controlling player and get his mouse coords
-    for (plyr_idx=0; plyr_idx < PLAYERS_COUNT; plyr_idx++)
+    // Determine the controlling user's mouse coords
+    for (user = 0; user < MAX_NET_USERS; user++)
     {
-        player = get_player(plyr_idx);
-        pckt = get_packet(plyr_idx);
-        if ((pckt->action != 0) && (player->victory_state == VicS_WonLevel))
+        pckt = get_packet(user);
+        if (pckt->action != 0)
             break;
     }
-    if (plyr_idx < PLAYERS_COUNT)
+    if (user < MAX_NET_USERS)
     {
         x = pckt->actn_par1;
         y = pckt->actn_par2;
+        torture_idle_start = LbTimerClock();
     } else
     {
-        plyr_idx = my_player_number;
-        player = get_player(plyr_idx);
-        pckt = get_packet(plyr_idx);
+        pckt = get_local_packet();
         x = 0;
         y = 0;
     }
     if ((pckt->action & 0x01) != 0)
     {
         frontend_set_state(FeSt_LEVEL_STATS);
-        if ((game.system_flags & GSF_NetworkActive) != 0)
+        if (network_is_active())
             LbNetwork_Stop();
         return;
     }
@@ -360,7 +376,7 @@ void fronttorture_update(void)
             {
                 volume = 0;
                 doorsnd->volume_step = 0;
-                stop_sample(emit_id, door->smptbl_id, 0);
+                stop_sample(emit_id, door->smptbl_id);
             } else
             if (volume >= FULL_LOUDNESS)
             {

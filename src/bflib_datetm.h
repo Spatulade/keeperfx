@@ -22,7 +22,6 @@
 
 #include <time.h>
 #include "bflib_basics.h"
-#include "keeperfx.hpp"
 #include "game_legacy.h"
 
 #ifdef __cplusplus
@@ -95,19 +94,18 @@ struct FrametimeMeasurements {
 
 extern int debug_display_frametime;
 extern void initial_time_point();
-extern long double get_time_tick_ns();
+extern int64_t get_time_tick_ns();
 extern void frametime_start_measurement(int frametime_kind);
 extern void frametime_end_measurement(int frametime_kind);
 extern void framerate_measurement_capture(int framerate_kind);
-extern float get_delta_time();
 
 extern struct FrametimeMeasurements frametime_measurements;
 
-int get_current_slowdown_percentage(void);
+int get_current_stutter_milliseconds(void);
 
-extern int slowdown_current;
-extern int slowdown_average;
-extern int slowdown_max;
+extern int stutter_detection_current;
+extern int stutter_detection_average;
+extern int stutter_detection_max;
 /******************************************************************************/
 #ifdef __cplusplus
 }

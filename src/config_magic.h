@@ -22,6 +22,7 @@
 #include "globals.h"
 #include "bflib_basics.h"
 #include "creature_instances.h"
+#include "gui_soundmsgs.h"
 
 #include "config.h"
 
@@ -124,6 +125,10 @@ enum ShotModelFlags {
     ShMF_Penetrating    = 0x8000,
     ShMF_NeverBlock     = 0x10000,
     ShMF_WallPierce     = 0x20000,
+    ShMF_NoAirDamage     = 0x40000,
+    ShMF_WindImmune      = 0x80000,
+    ShMF_FixedDamage     = 0x100000,
+    ShMF_HiddenProjectile = 0x200000,
 };
 
 #define PwCast_None           (0LL)
@@ -193,12 +198,20 @@ enum ShotModelFlags {
 #define PwCast_OwnedObjects   (1LL << 32)
 #define PwCast_NeutrlObjects  (1LL << 33)
 #define PwCast_EnemyObjects   (1LL << 34)
+#define PwCast_OwnedObjectsPickup   (1LL << 35)
+#define PwCast_NeutrlObjectsPickup  (1LL << 36)
+#define PwCast_EnemyObjectsPickup   (1LL << 37)
+#define PwCast_OwnedObjectsSlap     (1LL << 38)
+#define PwCast_NeutrlObjectsSlap    (1LL << 39)
+#define PwCast_EnemyObjectsSlap     (1LL << 40)
 
 #define PwCast_AllCrtrs (PwCast_CustodyCrtrs|PwCast_OwnedCrtrs|PwCast_AlliedCrtrs|PwCast_EnemyCrtrs|PwCast_NConscCrtrs|PwCast_BoundCrtrs)
 #define PwCast_AllFood (PwCast_OwnedFood|PwCast_NeutrlFood|PwCast_EnemyFood)
 #define PwCast_AllGold (PwCast_OwnedGold|PwCast_NeutrlGold|PwCast_EnemyGold)
 #define PwCast_AllObjects (PwCast_OwnedObjects|PwCast_NeutrlObjects|PwCast_EnemyObjects)
-#define PwCast_AllThings (PwCast_CustodyCrtrs|PwCast_OwnedCrtrs|PwCast_AlliedCrtrs|PwCast_EnemyCrtrs|PwCast_AllFood|PwCast_AllGold|PwCast_OwnedSpell|PwCast_OwnedBoulders|PwCast_AllObjects)
+#define PwCast_AllObjectsPickup (PwCast_OwnedObjectsPickup|PwCast_NeutrlObjectsPickup|PwCast_EnemyObjectsPickup)
+#define PwCast_AllObjectsSlap (PwCast_OwnedObjectsSlap|PwCast_NeutrlObjectsSlap|PwCast_EnemyObjectsSlap)
+#define PwCast_AllThings (PwCast_CustodyCrtrs|PwCast_OwnedCrtrs|PwCast_AlliedCrtrs|PwCast_EnemyCrtrs|PwCast_AllFood|PwCast_AllGold|PwCast_OwnedSpell|PwCast_OwnedBoulders|PwCast_AllObjects|PwCast_AllObjectsPickup|PwCast_EnemyObjectsSlap)
 #define PwCast_AllGround (PwCast_UnclmdGround|PwCast_NeutrlGround|PwCast_OwnedGround|PwCast_AlliedGround|PwCast_EnemyGround)
 #define PwCast_NotEnemyGround (PwCast_UnclmdGround|PwCast_NeutrlGround|PwCast_OwnedGround|PwCast_AlliedGround)
 #define PwCast_AllTall (PwCast_NeutrlTall|PwCast_OwnedTall|PwCast_AlliedTall|PwCast_EnemyTall)
@@ -225,7 +238,7 @@ struct SpellConfigStats {
 };
 
 struct ShotHitConfig {
-    ThingModel effect_model; /**< Effect kind to be created when the shot hits. */
+    EffectOrEffElModel effect_model; /**< Effect kind to be created when the shot hits. */
     short sndsample_idx; /**< Base sound sample to be played on hit. */
     unsigned char sndsample_range; /**< Range for random sound sample selection. */
     unsigned char withstand; /**< Whether the shot can withstand a hit without getting destroyed; could be converted to flags. */
@@ -286,17 +299,13 @@ struct ShotConfigStats {
     unsigned char fall_acceleration;
     unsigned char cast_spell_kind;
     char push_on_hit;
-    unsigned char hidden_projectile;
     unsigned char destroy_on_first_hit;
     short experience_given_to_shooter;
     short inertia_floor;
     short inertia_air;
     short bounce_angle;
-    short wind_immune;
-    short no_air_damage;
     unsigned char target_hitstop_turns;
     short animation_transparency;
-    short fixed_damage;
     short light_radius;
     unsigned char light_intensity;
     unsigned char light_flags;
@@ -313,6 +322,7 @@ struct ShotConfigStats {
     short spread_xy;
     short spread_z;
     short speed_deviation;
+    FuncIdx hit_thing_lua_func_idx;
 };
 
 typedef unsigned char (*Expand_Check_Func)(void);
@@ -356,7 +366,7 @@ struct SpecialConfigStats {
     char code_name[COMMAND_WORD_LEN];
     ThingModel artifact_model;
     TextStringId tooltip_stridx;
-    short speech;
+    SpeechRef speech;
     short effect_id;
     short value;
 };
@@ -419,6 +429,7 @@ extern struct NamedCommand spell_desc[];
 extern struct NamedCommand shot_desc[];
 extern struct NamedCommand power_desc[];
 extern struct SpellConfig spell_config[];
+extern const struct NamedCommand hit_type_desc[];
 extern const struct NamedCommand spell_effect_flags[];
 extern const struct NamedCommand powermodel_properties_commands[];
 extern const struct LongNamedCommand powermodel_castability_commands[];

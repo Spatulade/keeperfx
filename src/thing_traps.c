@@ -40,14 +40,13 @@
 #include "room_util.h"
 #include "game_legacy.h"
 #include "frontend.h"
-#include "engine_arrays.h"
 #include "engine_render.h"
 #include "gui_topmsg.h"
 
-#include "keeperfx.hpp"
 #include "creature_senses.h"
 #include "cursor_tag.h"
 #include "player_instances.h"
+#include "room_workshop.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -69,7 +68,7 @@ TbBool trap_is_active(const struct Thing *thing)
     return ((thing->trap.num_shots > 0) && (thing->trap.rearm_turn <= get_gameturn()));
 }
 
-TbBool trap_is_slappable(const struct Thing *thing, PlayerNumber plyr_idx)
+TbBool trap_is_slappable_by_player(const struct Thing *thing, PlayerNumber plyr_idx)
 {
     struct TrapConfigStats *trapst;
     if (thing->owner == plyr_idx)
@@ -142,10 +141,20 @@ TbBool subtile_has_trap_on(MapSubtlCoord stl_x, MapSubtlCoord stl_y)
     return !thing_is_invalid(traptng);
 }
 
+TbBool player_can_sell_trap_on_slab(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabCoord slb_y)
+{
+    struct SlabMap* slb = get_slabmap_block(slb_x, slb_y);
+    if (slb->owner != plyr_idx)
+        return false;
+    //This assumes there is just one trap per slab. Could go wrong on multiple traps with only some of them sellable.
+    struct Thing* traptng = get_trap_for_slab_position(slb_x, slb_y);
+    return thing_is_sellable_trap(traptng);
+}
+
 TbBool slab_middle_row_has_trap_on(MapSlabCoord slb_x, MapSlabCoord slb_y)
 {
     int i;
-    for (i = 0; i <= 2; i++)
+    for (i = 0; i < STL_PER_SLB; i++)
     {
         if (subtile_has_trap_on(slab_subtile(slb_x,i), slab_subtile_center(slb_y)))
         {
@@ -158,7 +167,7 @@ TbBool slab_middle_row_has_trap_on(MapSlabCoord slb_x, MapSlabCoord slb_y)
 TbBool slab_middle_column_has_trap_on(MapSlabCoord slb_x, MapSlabCoord slb_y)
 {
     int i;
-    for (i = 0; i <= 2; i++)
+    for (i = 0; i < STL_PER_SLB; i++)
     {
         if (subtile_has_trap_on(slab_subtile_center(slb_x), slab_subtile(slb_y,i)))
         {
@@ -631,6 +640,8 @@ void activate_trap(struct Thing *traptng, struct Thing *creatng)
     case TrpAcT_Power:
         activate_trap_god_spell(traptng, creatng, trapst->created_itm_model);
         break;
+    case TrpAcT_None:
+        break;
     default:
         ERRORLOG("Illegal trap activation type %d (idx=%d)",(int)trapst->activation_type, traptng->index);
         break;
@@ -926,6 +937,37 @@ void set_trap_shots(struct Thing *traptng, int shots)
     }
 }
 
+static void select_trap_animation(struct Thing *traptng, const struct TrapConfigStats *trapst, int32_t *anim_idx, int32_t *anim_speed)
+{
+    GameTurn turn = get_gameturn();
+
+    *anim_idx = trapst->sprite_anim_idx;
+    *anim_speed = trapst->anim_speed;
+    if ((traptng->trap.wait_for_rearm == true) && (traptng->trap.rearm_turn > turn)) {
+        if ((traptng->trap.shooting_finished_turn > turn) && (trapst->attack_sprite_anim_idx != 0)) {
+            *anim_idx = trapst->attack_sprite_anim_idx;
+            *anim_speed = trapst->attack_anim_speed;
+        } else if (trapst->recharge_sprite_anim_idx != 0) {
+            *anim_idx = trapst->recharge_sprite_anim_idx;
+            *anim_speed = trapst->recharge_anim_speed;
+        }
+    }
+}
+
+void update_trap_draw(struct Thing *traptng)
+{
+    char start_frame = 0;
+    const struct TrapConfigStats *trapst = get_trap_model_stats(traptng->model);
+    int32_t anim_idx;
+    int32_t anim_speed;
+
+    select_trap_animation(traptng, trapst, &anim_idx, &anim_speed);
+    if (trapst->random_start_frame) {
+        start_frame = -1;
+    }
+    set_thing_draw(traptng, anim_idx, anim_speed, trapst->sprite_size_max, trapst->unanimated, start_frame, ODC_Default);
+}
+
 TngUpdateRet update_trap(struct Thing *traptng)
 {
     SYNCDBG(18,"Starting");
@@ -947,35 +989,14 @@ TngUpdateRet update_trap(struct Thing *traptng)
     }
     if (traptng->trap.wait_for_rearm == true) // Trap rearming, so either 'shooting' anim or 'recharge' anim.
     {
-        if ((traptng->trap.rearm_turn <= get_gameturn())) // Recharge complete, rearm.
+        int32_t anim_idx;
+        int32_t anim_speed;
+
+        select_trap_animation(traptng, trapst, &anim_idx, &anim_speed);
+        set_thing_animation(traptng, anim_idx, anim_speed);
+        if (traptng->trap.rearm_turn <= get_gameturn()) // Recharge complete, rearm.
         {
-            // Back to regular anim.
-            traptng->anim_sprite = get_td_animation_sprite(trapst->sprite_anim_idx);
-            traptng->max_frames = keepersprite_frames(traptng->anim_sprite);
             traptng->trap.wait_for_rearm = false;
-        }
-        else if (traptng->trap.shooting_finished_turn > (get_gameturn())) // Shot anim is playing.
-        {
-            if (trapst->attack_sprite_anim_idx != 0)
-            {
-                traptng->anim_sprite = get_td_animation_sprite(trapst->attack_sprite_anim_idx);
-                traptng->anim_speed = trapst->attack_anim_speed;
-                traptng->max_frames = keepersprite_frames(traptng->anim_sprite);
-            }
-        }
-        else // Done shooting, still recharging. Show recharge animation.
-        {
-            if (trapst->recharge_sprite_anim_idx != 0)
-            {
-                traptng->anim_sprite = get_td_animation_sprite(trapst->recharge_sprite_anim_idx);
-                traptng->anim_speed = trapst->recharge_anim_speed;
-            }
-            else
-            {
-                traptng->anim_sprite = get_td_animation_sprite(trapst->sprite_anim_idx);
-                traptng->anim_speed = trapst->anim_speed;
-            }
-            traptng->max_frames = keepersprite_frames(traptng->anim_sprite);
         }
     }
     if (trapst->activation_type == TrpAcT_CreatureShot)
@@ -1037,13 +1058,7 @@ struct Thing *create_trap(struct Coord3d *pos, ThingModel trpkind, PlayerNumber 
     thing->parent_idx = thing->index;
     thing->owner = plyr_idx;
     thing->trap.flag_number = trapst->flag_number;
-    char start_frame;
-    if (trapst->random_start_frame) {
-        start_frame = -1;
-    } else {
-        start_frame = 0;
-    }
-    set_thing_draw(thing, trapst->sprite_anim_idx, trapst->anim_speed, trapst->sprite_size_max, trapst->unanimated, start_frame, ODC_Default);
+    update_trap_draw(thing);
     if (trapst->unshaded) {
         thing->rendering_flags |= TRF_Unshaded;
     } else {
@@ -1137,7 +1152,7 @@ unsigned long remove_trap(struct Thing *traptng, int32_t *sell_value)
         {
             // Do the refund only if we were able to sell armed trap
             struct TrapConfigStats *trapst = get_trap_model_stats(traptng->model);
-            long i = compute_value_percentage(trapst->selling_value, game.conf.rules[traptng->owner].game.trap_sale_percent);
+            long i = compute_value_percentage(trapst->selling_value, game.conf.rules[traptng->owner].gameplay.trap_sale_percent);
             if (traptng->trap.num_shots == 0)
             {
                 // Trap not armed - try selling crate from workshop
@@ -1314,7 +1329,7 @@ void trap_fire_shot_without_target(struct Thing *firing, ThingModel shot_model, 
                 pos1.z.val = pos2.z.val;
             }
             // Compute shot damage
-            if (shotst->fixed_damage == 0)
+            if (!(shotst->model_flags & ShMF_FixedDamage))
             {
                 if (flag_is_set(shotst->model_flags,ShMF_StrengthBased))
                 {

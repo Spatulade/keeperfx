@@ -61,6 +61,7 @@ pkg/campgns/lqizgood/text_chi.dat \
 pkg/campgns/lqizgood/text_fre.dat \
 pkg/campgns/lqizgood/text_pol.dat \
 pkg/campgns/lqizgood/text_por.dat \
+pkg/campgns/lqizgood/text_spa.dat \
 pkg/campgns/lqizgood/text_ukr.dat \
 pkg/campgns/origplus/text_eng.dat \
 pkg/campgns/origplus/text_chi.dat \
@@ -112,6 +113,7 @@ pkg/levels/standard/text_chi.dat \
 pkg/levels/standard/text_fre.dat \
 pkg/levels/standard/text_ger.dat \
 pkg/levels/standard/text_por.dat \
+pkg/levels/standard/text_rus.dat \
 pkg/levels/standard/text_spa.dat \
 pkg/levels/lostlvls/text_eng.dat \
 pkg/levels/lostlvls/text_por.dat \

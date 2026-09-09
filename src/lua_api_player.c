@@ -11,6 +11,8 @@
 #include "player_data.h"
 #include "lvl_script_lib.h"
 #include "player_utils.h"
+#include "dungeon_data.h"
+#include "config_campaigns.h"
 
 #include "post_inc.h"
 
@@ -39,8 +41,25 @@ static int lua_Add_gold_to_player(lua_State *L)
 static int lua_Set_texture(lua_State *L)
 {
     struct PlayerRange player_range = luaL_checkPlayerRange(L, 1);
-    long texture_id = luaL_checkNamedCommand(L,2,texture_pack_desc);
-
+    
+    long texture_id;
+    if (lua_isnumber(L, 2)) {
+        // Integer input is 0-based: ID 0 = tmapa000.dat
+        // set_player_texture uses slab_ext_data where slot 0 is the base map texture
+        // and slot N+1 holds tmapaN.dat, so we add 1 to convert. -1 means reset.
+        long n = lua_tointeger(L, 2);
+        if (n < 0) 
+            texture_id = -1;
+        else 
+            texture_id = n + 1; 
+    } else {
+        // String input is 1-based and uses texture_pack_desc values ("STANDARD"=1, "ANCIENT"=2, ...).
+        // These values already match the slab_ext_data slot layout.
+        // "NONE"=0 has no corresponding texture file, so treat it as reset (-1).
+        texture_id = luaL_checkNamedCommand(L, 2, texture_pack_desc);
+        if (texture_id == 0)
+            texture_id = -1;
+    }
     for (PlayerNumber i = player_range.start_idx; i < player_range.end_idx; i++)
     {
         set_player_texture(i, texture_id);
@@ -142,6 +161,29 @@ static int player_set_field(lua_State *L) {
 
     PlayerNumber player_idx = luaL_checkPlayerSingle(L, 1);
     const char* key = luaL_checkstring(L, 2);
+    struct PlayerInfo *player = get_player(player_idx);
+
+    if (strcmp(key, "player_name") == 0) {
+        const char* name = luaL_checkstring(L, 3);
+        if (!player_invalid(player)) {
+            snprintf(player->player_name, sizeof(player->player_name), "%s", name);
+        }
+        return 0;
+    } else if (strcmp(key, "colour") == 0) {
+        long colour_idx;
+        if (lua_type(L, 3) == LUA_TSTRING) {
+            const char* name = lua_tostring(L, 3);
+            colour_idx = get_rid(cmpgn_human_player_options, name);
+            if (colour_idx == -1) {
+                return luaL_argerror(L, 3, "unrecognized colour name");
+            }
+        } else {
+            colour_idx = luaL_checkinteger(L, 3);
+        }
+        set_player_colour(player_idx, (unsigned char)colour_idx);
+        return 0;
+    }
+
     int value = luaL_checkinteger(L, 3);
 
     int32_t variable_type;
@@ -159,7 +201,9 @@ static int player_set_field(lua_State *L) {
 static int player_get_field(lua_State *L) {
     const char* key = luaL_checkstring(L, 2);
     PlayerNumber plyr_idx = luaL_checkPlayerSingle(L, 1);
-
+    struct PlayerInfo *player = get_player(plyr_idx);
+    struct Dungeon *dungeon = get_dungeon(plyr_idx);
+    
     int32_t variable_type, variable_id;
 
     // C method lookup
@@ -167,7 +211,9 @@ static int player_get_field(lua_State *L) {
         return 1;
 
     // Built-in fields
-    if (strcmp(key, "heart") == 0) {
+    if (strcmp(key, "camera") == 0) {
+        lua_pushCamera(L, plyr_idx);
+    } else if (strcmp(key, "heart") == 0) {
         lua_pushThing(L, get_player_soul_container(plyr_idx));
     } else if (strcmp(key, "controls") == 0) {
         lua_pushinteger(L, plyr_idx);
@@ -175,8 +221,31 @@ static int player_get_field(lua_State *L) {
     } else if (strcmp(key, "available") == 0) {
         lua_pushinteger(L, plyr_idx);
         lua_pushcclosure(L, player_get_available, 1);
-    }
-    else if (parse_get_varib(key, &variable_id, &variable_type, 1)) {
+    } else if (strcmp(key, "type") == 0) {
+        if (player_invalid(player)) {
+            lua_pushnil(L);
+        } else if (player_is_roaming(plyr_idx)) {
+            lua_pushstring(L, "Roaming");
+        } else if (player_is_neutral(plyr_idx)) {
+            lua_pushstring(L, "Neutral");
+        } else if (player->allocflags & PlaF_CompCtrl) {
+            lua_pushstring(L, "Computer");
+        } else if (player->is_active) {
+            lua_pushstring(L, "Human");
+        } else {
+            lua_pushstring(L, "Inactive");
+        }
+    } else if (strcmp(key, "max_creatures") == 0) {
+        if (dungeon_invalid(dungeon)) {
+            lua_pushinteger(L, 0);
+        } else {
+            lua_pushinteger(L, dungeon->max_creatures_attracted);
+        }
+    } else if (strcmp(key, "player_name") == 0) {
+        lua_pushstring(L, player_invalid(player) ? "" : player->player_name);
+    } else if (strcmp(key, "colour") == 0) {
+        lua_pushstring(L, get_conf_parameter_text(cmpgn_human_player_options, get_player_color_idx(plyr_idx)));
+    } else if (parse_get_varib(key, &variable_id, &variable_type, 1)) {
         lua_pushinteger(L, get_condition_value(plyr_idx, variable_type, variable_id));
     } else if (try_get_from_methods(L, 1, key)) {
         return 1;

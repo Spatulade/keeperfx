@@ -61,6 +61,7 @@ enum TbFileGroups {
         FGrp_CmpgConfig,
         FGrp_CmpgMedia,
         FGrp_Music,
+        FGrp_MpLevels,
 };
 
 enum TbExtraLevels {
@@ -92,6 +93,7 @@ enum Ensigns {
     EnsDisMulti2    = 46,
     EnsDisMulti3    = 47,
     EnsDisMulti4    = 48,
+    EnsCoop         = 49,
 };
 
 enum TbLevelState {
@@ -113,6 +115,7 @@ enum TbConfigLoadFlags {
     CnfLd_ListOnly      =  0x01, /**< Load only list of items and their names, don't parse actual options (when applicable). */
     CnfLd_AcceptPartial =  0x02, /**< Accept partial files (with only some options set), and don't clear previous configuration. */
     CnfLd_IgnoreErrors  =  0x04, /**< Do not log error message on failures (still, return with error). */
+    CnfLd_PreListed     =  0x08, /**< Already parsed the names. */
 };
 
 #pragma pack(1)
@@ -175,8 +178,27 @@ enum dataTypes
                     char: dt_char, \
                     default: dt_default)))
 
-#define field(field)\
-    &field, var_type(field)
+// field_t: portable, works on all C99+ compilers including MSVC.
+// Takes the struct type name explicitly — produces a compile-time constant offset.
+// Use for simple (non-array-subscript) member paths.
+#include <stddef.h>
+#define field_t(type_name, member_path) \
+    (void*)(ptrdiff_t)offsetof(type_name, member_path), \
+    var_type(((type_name*)0)->member_path)
+
+// field_a: like field_t but for array-element member paths array[idx].
+// offsetof(T, arr) + idx*sizeof(element) is compile-time constant on all compilers,
+// whereas offsetof(T, arr[n]) is a GCC extension rejected by MSVC.
+#define field_a(type_name, array_member, idx) \
+    (void*)(ptrdiff_t)(offsetof(type_name, array_member) + (idx) * sizeof(((type_name*)0)->array_member[0])), \
+    var_type(((type_name*)0)->array_member[idx])
+
+// field: GCC/Clang-only convenience alias that infers the type from an expression
+// using the typeof extension. Do not use in new code — prefer field_t()/field_a().
+#ifndef _MSC_VER
+#define field(elem0_expr, member_path) \
+    field_t(typeof(elem0_expr), member_path)
+#endif
 
 /******************************************************************************/
 struct CommandWord {
@@ -209,16 +231,17 @@ struct NamedField {
 };
 
 struct NamedFieldSet {
-    int32_t *const count_field;
+    int32_t* (*get_count)(void);
     const char* block_basename;
     const struct NamedField* named_fields;
     struct NamedCommand* names;
     const int max_count;
     const size_t struct_size;
-    const void* struct_base;
+    void* (*get_struct_base)(void);
 };
 
 #define NAMFIELDWRNLOG(format, ...) LbWarnLog("%s(line %lu): " format "\n", src_str , text_line_number, ##__VA_ARGS__)
+#define NAMFIELDERRLOG(format, ...) LbErrorLog("%s(line %lu): " format "\n", src_str , text_line_number, ##__VA_ARGS__)
 
 extern TbBool AssignCpuKeepers;
 
@@ -246,6 +269,11 @@ char *prepare_file_fmtpath_mod(const char *mod_dir, short fgroup, const char *fm
 char *prepare_file_path_buf(char *dst, int dst_size, short fgroup, const char *fname);
 char *prepare_file_path(short fgroup, const char *fname);
 char *prepare_file_fmtpath(short fgroup, const char *fmt_str, ...);
+/* New API - self-documenting game vs. mod distinction */
+char *get_game_file_path(short fgroup, const char *fname);
+char *get_mod_file_path(const char *mod_dir, short fgroup, const char *fname);
+char *get_game_file_path_fmt(short fgroup, const char *fmt_str, ...);
+char *get_mod_file_path_fmt(const char *mod_dir, short fgroup, const char *fmt_str, ...);
 unsigned char *load_data_file_to_buffer(int32_t *ldsize, short fgroup, const char *fmt_str, ...);
 /******************************************************************************/
 TbBool load_config(const struct ConfigFileData* file_data, unsigned short flags);
@@ -258,6 +286,7 @@ short is_multiplayer_level(LevelNumber lvnum);
 short is_campaign_level(LevelNumber lvnum);
 short is_freeplay_level(LevelNumber lvnum);
 TbBool is_level_in_current_campaign(LevelNumber lvnum);
+TbBool set_level_ensign(LevelNumber lvnum, short ensign_id);
 int array_index_for_singleplayer_level(LevelNumber sp_lvnum);
 int storage_index_for_bonus_level(LevelNumber bn_lvnum);
 LevelNumber first_singleplayer_level(void);
@@ -317,6 +346,7 @@ int64_t value_animid         (const struct NamedField* named_field, const char* 
 int64_t value_transpflg      (const struct NamedField* named_field, const char* value_text, const struct NamedFieldSet* named_fields_set, int idx, const char* src_str, unsigned char flags);
 int64_t value_stltocoord     (const struct NamedField* named_field, const char* value_text, const struct NamedFieldSet* named_fields_set, int idx, const char* src_str, unsigned char flags);
 int64_t value_function       (const struct NamedField* named_field, const char* value_text, const struct NamedFieldSet* named_fields_set, int idx, const char* src_str, unsigned char flags);
+int64_t value_stringId       (const struct NamedField* named_field, const char* value_text, const struct NamedFieldSet* named_fields_set, int idx, const char* src_str, unsigned char flags);
 
 void assign_icon   (const struct NamedField* named_field, int64_t value, const struct NamedFieldSet* named_fields_set, int idx, const char* src_str, unsigned char flags);
 void assign_default(const struct NamedField* named_field, int64_t value, const struct NamedFieldSet* named_fields_set, int idx, const char* src_str, unsigned char flags);

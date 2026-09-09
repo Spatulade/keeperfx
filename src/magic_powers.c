@@ -24,6 +24,7 @@
 #include "bflib_math.h"
 #include "bflib_planar.h"
 #include "bflib_sound.h"
+#include "config_sounds.h"
 
 #include "player_data.h"
 #include "player_instances.h"
@@ -70,15 +71,15 @@ extern "C" {
 const long power_sight_close_instance_time[] = {4, 4, 5, 5, 6, 6, 7, 7, 8};
 
 unsigned char destroy_effect[][9] = {
-    {88, 88, 88, 88, 79, 88, 88, 88, 88,},//power_level=0
-    {88, 88, 88, 88, 32, 88, 88, 88, 88,},
-    {88, 88, 88, 79, 32, 79, 88, 88, 88,},
-    {88, 79, 88, 79, 32, 79, 88, 79, 88,},
-    {88, 79, 88, 79, 32, 79, 88, 79, 88,},
-    {88, 88, 88, 32, 32, 32, 88, 88, 88,},
-    {88, 32, 88, 32, 32, 32, 88, 32, 88,},
-    {79, 32, 79, 32, 32, 32, 79, 32, 79,},
-    {32, 32, 32, 32, 32, 32, 32, 32, 32,},//power_level=8
+    {'X','X','X','X','O','X','X','X','X',},//power_level=0
+    {'X','X','X','X',' ','X','X','X','X',},
+    {'X','X','X','O',' ','O','X','X','X',},
+    {'X','O','X','O',' ','O','X','O','X',},
+    {'X','O','X','O',' ','O','X','O','X',},
+    {'X','X','X',' ',' ',' ','X','X','X',},
+    {'X',' ','X',' ',' ',' ','X',' ','X',},
+    {'O',' ','O',' ',' ',' ','O',' ','O',},
+    {' ',' ',' ',' ',' ',' ',' ',' ',' ',},//power_level=8
 };
 
 /******************************************************************************/
@@ -167,7 +168,7 @@ TbBool can_cast_spell_f(PlayerNumber plyr_idx, PowerKind pwkind, MapSubtlCoord s
                 cast_on_tng = false;
             }
         }
-        if ((powerst->can_cast_flags & PwCast_ThingOrMap) != 0)
+        if (flag_is_set(powerst->can_cast_flags,PwCast_ThingOrMap))
         {
             // Fail only if both functions have failed - one is enough
             if (!cast_at_xy && !cast_on_tng) {
@@ -302,12 +303,30 @@ TbBool can_cast_power_on_thing(PlayerNumber plyr_idx, const struct Thing *thing,
         if ((powerst->can_cast_flags & PwCast_OwnedObjects) != 0)
         {
             if (thing->owner == plyr_idx) {
+                return true;
+            }
+        }
+        if ((powerst->can_cast_flags & PwCast_NeutrlObjects) != 0)
+        {
+            if (is_neutral_thing(thing)) {
+                return true;
+            }
+        }
+        if ((powerst->can_cast_flags & PwCast_EnemyObjects) != 0)
+        {
+            if ((thing->owner != plyr_idx) && !is_neutral_thing(thing)) {
+                return true;
+            }
+        }
+        if ((powerst->can_cast_flags & PwCast_OwnedObjectsPickup) != 0)
+        {
+            if (thing->owner == plyr_idx) {
                 if (object_is_pickable_by_hand_to_hold(thing)) {
                     return true;
                 }
             }
         }
-        if ((powerst->can_cast_flags & PwCast_NeutrlObjects) != 0)
+        if ((powerst->can_cast_flags & PwCast_NeutrlObjectsPickup) != 0)
         {
             if (is_neutral_thing(thing)) {
                 if (object_is_pickable_by_hand_to_hold(thing)) {
@@ -315,10 +334,34 @@ TbBool can_cast_power_on_thing(PlayerNumber plyr_idx, const struct Thing *thing,
                 }
             }
         }
-        if ((powerst->can_cast_flags & PwCast_EnemyObjects) != 0)
+        if ((powerst->can_cast_flags & PwCast_EnemyObjectsPickup) != 0)
         {
             if ((thing->owner != plyr_idx) && !is_neutral_thing(thing)) {
                 if (object_is_pickable_by_hand_to_hold(thing)) {
+                    return true;
+                }
+            }
+        }
+        if ((powerst->can_cast_flags & PwCast_OwnedObjectsSlap) != 0)
+        {
+            if (thing->owner == plyr_idx) {
+                if (object_is_slappable(thing)) {
+                    return true;
+                }
+            }
+        }
+        if ((powerst->can_cast_flags & PwCast_NeutrlObjectsSlap) != 0)
+        {
+            if (is_neutral_thing(thing)) {
+                if (object_is_slappable(thing)) {
+                    return true;
+                }
+            }
+        }
+        if ((powerst->can_cast_flags & PwCast_EnemyObjectsSlap) != 0)
+        {
+            if ((thing->owner != plyr_idx) && !is_neutral_thing(thing)) {
+                if (object_is_slappable(thing)) {
                     return true;
                 }
             }
@@ -337,7 +380,7 @@ TbBool can_cast_power_on_thing(PlayerNumber plyr_idx, const struct Thing *thing,
         if ((powerst->can_cast_flags & PwCast_OwnedBoulders) != 0)
         {
             if (thing->owner == plyr_idx) {
-                if (shot_is_slappable(thing, plyr_idx))  {
+                if (shot_is_slappable_by_player(thing, plyr_idx))  {
                     return true;
                 }
             }
@@ -360,6 +403,11 @@ TbBool can_cast_power_on_thing(PlayerNumber plyr_idx, const struct Thing *thing,
     if (thing_is_creature(thing))
     {
         struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
+        if (pwkind == PwrK_POSSESS) {
+            if (flag_is_set(get_creature_model_flags(thing), CMF_CannotPossess)) {
+                return false;
+            }
+        }
         if (creature_is_leaving_and_cannot_be_stopped(thing))
         {
             return false;
@@ -669,11 +717,6 @@ TbBool can_cast_power_at_xy(PlayerNumber plyr_idx, PowerKind pwkind, MapSubtlCoo
             }
         }
     }
-    if ((can_cast & PwCast_Anywhere) != 0)
-    {
-        // If allowed casting anywhere, we're done
-        return true;
-    }
     if ((can_cast & PwCast_NeedsDelay) != 0)
     {
         struct PlayerInfo *player;
@@ -681,6 +724,11 @@ TbBool can_cast_power_at_xy(PlayerNumber plyr_idx, PowerKind pwkind, MapSubtlCoo
         if (get_gameturn() <= player->power_of_cooldown_turn) {
             return false;
         }
+    }
+    if ((can_cast & PwCast_Anywhere) != 0)
+    {
+        // If allowed casting anywhere, we're done
+        return true;
     }
     PlayerNumber slb_owner;
     slb_owner = slabmap_owner(slb);
@@ -893,7 +941,7 @@ long find_spell_age_percentage(PlayerNumber plyr_idx, PowerKind pwkind)
 
 TbBool pay_for_spell(PlayerNumber plyr_idx, PowerKind pwkind, KeepPwrLevel power_level)
 {
-    long price;
+    GoldAmount price;
     if (pwkind >= game.conf.magic_conf.power_types_count)
         return false;
     if (power_level >= MAGIC_OVERCHARGE_LEVELS)
@@ -1159,9 +1207,11 @@ static TbResult magic_use_power_hand(PowerKind power_kind, PlayerNumber plyr_idx
 {
     if (power_hand_is_full(get_player(plyr_idx)))
         return Lb_FAIL;
-    else
-    if (place_thing_in_power_hand(thing, plyr_idx))
+    else if (place_thing_in_power_hand(thing, plyr_idx))
+    {
+        lua_on_pick_up(thing, plyr_idx);
         return Lb_SUCCESS;
+    }
     else
         return Lb_FAIL;
 }
@@ -1611,6 +1661,8 @@ TbBool update_creature_influenced_by_call_to_arms_at_pos(struct Thing *creatng, 
         creature_stop_affected_by_call_to_arms(creatng);
         return false;
     }
+
+    TbBool is_sleeping = creature_is_sleeping(creatng);
     if (!creature_is_called_to_arms(creatng))
     {
         if (!external_set_thing_state(creatng, CrSt_ArriveAtCallToArms))
@@ -1618,6 +1670,11 @@ TbBool update_creature_influenced_by_call_to_arms_at_pos(struct Thing *creatng, 
             return false;
         }
     }
+    if (is_sleeping) {
+        struct CreatureModelConfig* crconf = creature_stats_get_from_thing(creatng);
+        anger_apply_anger_to_creature(creatng, crconf->annoy_woken_up, AngR_Other, 1);
+    }
+
     setup_person_move_to_coord(creatng, cta_pos, NavRtF_Default);
     creatng->continue_state = CrSt_ArriveAtCallToArms;
     cctrl->called_to_arms = true;
@@ -1744,6 +1801,7 @@ static TbResult magic_use_power_slap_thing(PowerKind power_kind, PlayerNumber pl
 {
     struct PlayerInfo *player;
     struct Dungeon *dungeon;
+    lua_on_slap(thing, plyr_idx);
     if (!thing_exists(thing)) {
         return Lb_FAIL;
     }
@@ -1765,10 +1823,27 @@ static TbResult magic_use_power_possess_thing(PowerKind power_kind, PlayerNumber
     if (!thing_exists(thing)) {
         return Lb_FAIL;
     }
+    if (thing_is_creature(thing)) {
+        if (flag_is_set(get_creature_model_flags(thing), CMF_CannotPossess)) {
+            return Lb_FAIL;
+        }
+    }
+
+    if ((mod_flags & PwMod_CastForFree) == 0)
+    {
+        // If we can't afford the power, fail
+        if (!pay_for_spell(plyr_idx, power_kind, 0)) {
+            if (is_my_player_number(plyr_idx))
+                output_message(SMsg_GoldNotEnough, 0);
+            return Lb_OK;
+        }
+    }
+
     player = get_player(plyr_idx);
     player->influenced_thing_idx = thing->index;
     player->influenced_thing_creation = thing->creation_turn;
-    player->first_person_dig_claim_mode = false;
+    struct UserState* ustate = get_player_user_state(player);
+    ustate->first_person_dig_claim_mode = false;
     player->teleport_destination = 19; // reset to default behaviour
     player->battleid = 1;
     // Note that setting Direct Control player instance requires player->influenced_thing_idx to be set correctly
@@ -1835,7 +1910,6 @@ TbBool affect_creature_by_power_call_to_arms(struct Thing *creatng, long range, 
         {
             if (update_creature_influenced_by_call_to_arms_at_pos(creatng, cta_pos))
             {
-                creature_mark_if_woken_up(creatng);
                 return true;
             }
         }
@@ -1896,7 +1970,7 @@ void process_magic_power_call_to_arms(PlayerNumber plyr_idx)
     TbBool free = ((slabmap_owner(slb) == plyr_idx) || dungeon->cta_free);
     if (!free)
     {
-        if ((game.conf.rules[plyr_idx].game.allies_share_cta) && (players_are_mutual_allies(plyr_idx, slabmap_owner(slb))))
+        if ((game.conf.rules[plyr_idx].gameplay.allies_share_cta) && (players_are_mutual_allies(plyr_idx, slabmap_owner(slb))))
         {
             free = true;
         }
@@ -1997,7 +2071,7 @@ TbResult magic_use_available_power_on_thing(PlayerNumber plyr_idx, PowerKind pwk
         // Make a rejection sound
         if (is_my_player_number(plyr_idx))
         {
-            play_non_3d_sample(119);
+            play_non_3d_sample(snd_refusal);
         }
     }
     return ret;
@@ -2105,7 +2179,7 @@ TbResult magic_use_available_power_on_subtile(PlayerNumber plyr_idx, PowerKind p
     if (ret == Lb_FAIL) {
         // Make a rejection sound
         if (is_my_player_number(plyr_idx))
-            play_non_3d_sample(119);
+            play_non_3d_sample(snd_refusal);
     }
     return ret;
 }

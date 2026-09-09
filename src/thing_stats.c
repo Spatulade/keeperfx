@@ -20,7 +20,7 @@
 
 #include "bflib_basics.h"
 #include "bflib_math.h"
-#include "bflib_inputctrl.h"
+#include "bflib_joyst.h"
 #include "config_creature.h"
 #include "config_crtrstates.h"
 #include "config_effects.h"
@@ -379,7 +379,7 @@ long compute_creature_max_strength(long base_param, CrtrExpLevel exp_level)
         exp_level = CREATURE_MAX_LEVEL-1;
     }
     long max_param = base_param + (game.conf.crtr_conf.exp.strength_increase_on_exp * base_param * (long)exp_level) / 100;
-    if (flag_is_set(game.conf.rules[0].game.classic_bugs_flags, ClscBug_Overflow8bitVal))
+    if (flag_is_set(game.conf.rules[0].gameplay.classic_bugs_flags, ClscBug_Overflow8bitVal))
     {
         return min(max_param, UCHAR_MAX+1); // DK1 limited shot damage to 256, not 255.
     }
@@ -796,7 +796,7 @@ GoldAmount calculate_correct_creature_pay(const struct Thing *thing)
         pay = (pay * modifier) / 100;
         // If torturing creature of that model, change the salary with a percentage set in rules.cfg.
         if (dungeon->tortured_creatures[thing->model] > 0)
-            pay = (pay * game.conf.rules[dungeon->owner].game.torture_payday) / 100;
+            pay = (pay * game.conf.rules[dungeon->owner].gameplay.torture_payday) / 100;
     }
     return pay;
 }
@@ -815,7 +815,7 @@ GoldAmount calculate_correct_creature_training_cost(const struct Thing *thing)
         training_cost = (training_cost * modifier) / 100;
         // If torturing creature of that model, change the training cost with a percentage set in rules.cfg.
         if (dungeon->tortured_creatures[thing->model] > 0)
-            training_cost = (training_cost * game.conf.rules[dungeon->owner].game.torture_training_cost) / 100;
+            training_cost = (training_cost * game.conf.rules[dungeon->owner].gameplay.torture_training_cost) / 100;
     }
     return training_cost;
 }
@@ -834,7 +834,7 @@ GoldAmount calculate_correct_creature_scavenging_cost(const struct Thing *thing)
         scavenger_cost = (scavenger_cost * modifier) / 100;
         // If torturing creature of that model, change the scavenging cost with a percentage set in rules.cfg.
         if (dungeon->tortured_creatures[thing->model] > 0)
-            scavenger_cost = (scavenger_cost * game.conf.rules[dungeon->owner].game.torture_scavenging_cost) / 100;
+            scavenger_cost = (scavenger_cost * game.conf.rules[dungeon->owner].gameplay.torture_scavenging_cost) / 100;
     }
     return scavenger_cost;
 }
@@ -988,7 +988,7 @@ static HitPoints apply_damage_to_creature(struct Thing *thing, HitPoints dmg)
       cdamage = 1;
     // Apply damage to the thing.
     thing->health -= cdamage;
-    thing->rendering_flags |= TRF_BeingHit;
+    thing->last_turn_damaged = game.play_gameturn + 1;
     // Red palette if the possessed creature is hit very strong.
     if (is_thing_some_way_controlled(thing))
     {
@@ -1017,7 +1017,7 @@ static HitPoints apply_damage_to_object(struct Thing *thing, HitPoints dmg)
 {
     HitPoints cdamage = dmg;
     thing->health -= cdamage;
-    thing->rendering_flags |= TRF_BeingHit;
+    thing->last_turn_damaged = game.play_gameturn + 1;
     return cdamage;
 }
 
@@ -1065,6 +1065,52 @@ HitPoints calculate_shot_real_damage_to_door(const struct Thing *doortng, const 
         }
     }
     return dmg;
+}
+
+HitPoints collide_door_and_boulder(struct Thing* doortng, struct Thing* boulder)
+{
+    const struct DoorConfigStats* doorst = get_door_model_stats(doortng->model);
+    TbBool is_magic = flag_is_set(doorst->model_flags, DoMF_ResistNonMagic);
+    TbBool is_midas = flag_is_set(doorst->model_flags, DoMF_Midas);
+
+    HitPoints boulder_damage = boulder->health;
+    HitPoints door_health = doortng->health;
+    HitPoints boulder_health = boulder->health;
+    HitPoints absorbed = 0;
+
+    if (is_magic)
+    {
+        boulder_damage /= 8;
+        if (boulder_damage < 1)
+            boulder_damage = 1;
+    }
+
+    if (is_midas)
+    {
+        absorbed = reduce_damage_for_midas(doortng->owner, max(door_health, boulder_damage), doorst->health);
+    }
+
+    // Generate effects for the gold taken.
+    for (int i = absorbed; i > 0; i -= 32)
+    {
+        create_effect(&doortng->mappos, TngEff_CoinFountain, doortng->owner);
+    }
+    //Door health is reduced by the damage done by the boulder, what is not absorbed by midas. But never more than it has health.
+    door_health -= min((boulder_damage - absorbed), door_health);
+
+    if (is_magic)
+    {
+        absorbed *= 8;
+    }
+    boulder_health -= ((doortng->health - door_health)*(1+(is_magic*7)) + absorbed);
+
+    doortng->health = door_health;
+    boulder->health = boulder_health;
+    if (door_health > 0 && boulder_health > 0)
+    {
+        ERRORLOG("%s (health %d) and %s (health %d) both survived a collision. Only one should have health remaining.", thing_model_name(doortng), doortng->health, thing_model_name(boulder), boulder->health);
+    }
+    return doortng->health;
 }
 
 /**

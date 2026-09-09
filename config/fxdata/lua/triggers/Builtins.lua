@@ -2,7 +2,7 @@
 -- Entry points for engine-triggered events (e.g. OnPowerCast, OnGameTick).
 -- These functions are called by the C engine and dispatch event data to the Lua trigger system.
 
----@alias event_type "PowerCast"|"Death"|"SpecialActivated"|"GameTick"|"ChatMsg"|"DungeonDestroyed"|"TrapPlaced"|"ApplyDamage"|"LevelUp"|"Rebirth"|"SlabKindChange"|"SlabOwnerChange"|"RoomOwnerChange"
+---@alias event_type "PowerCast"|"Death"|"SpecialActivated"|"GameTick"|"ChatMsg"|"DungeonDestroyed"|"TrapPlaced"|"ApplyDamage"|"LevelUp"|"PickUp"|"Slap"|"Rebirth"|"CreatureFellIntoAbyss"|"SlabKindChange"|"SlabOwnerChange"|"RoomOwnerChange"|"ShotHitThing"|"Destroyed"
 
 --- Called when a spell is cast on a unit
 --- @param pwkind power_kind
@@ -31,10 +31,10 @@ function OnCreatureDeath(unit)
 end
 
 --- Called when an object is destroyed
---- @param unit Object The unit that dies
-function OnObjectDestroyed(unit)
+--- @param object Object The object that is destroyed
+function OnObjectDestroyed(object)
     local eventData = {}
-    eventData.unit = unit
+    eventData.object = object
     ProcessEvent("Destroyed",eventData)
 end
 
@@ -78,7 +78,7 @@ function OnDungeonDestroyed(player)
     ProcessEvent("DungeonDestroyed",eventData)
 end
 
---- Called when a thing taked damage
+--- Called when a thing took damage
 ---@param thing Thing
 ---@param damage integer
 ---@param dealing_player Player
@@ -90,7 +90,6 @@ function OnApplyDamage(thing, damage, dealing_player)
     ProcessEvent("ApplyDamage",eventData)
 end
 
-
 --- Called when a creature levels up
 ---@param creature Creature
 function OnLevelUp(creature)
@@ -99,12 +98,38 @@ function OnLevelUp(creature)
     ProcessEvent("LevelUp",eventData)
 end
 
+--- Called when a thing is picked up. Can be Creatures, Chickens, Specials, Gold, etc.
+---@param thing Thing
+---@param player Player
+function OnPickUp(thing, player)
+    local eventData = {}
+    eventData.thing = thing
+    eventData.player = player
+    ProcessEvent("PickUp",eventData)
+end
+
+--- Called when a thing is slapped. Can be Creatures, Traps, Shots, Objects, etc.
+---@param thing Thing
+---@param player Player
+function OnSlap(thing, player)
+    local eventData = {}
+    eventData.thing = thing
+    eventData.player = player
+    ProcessEvent("Slap",eventData)
+end
+
 --- Called when a unit resurrects from his rebirth ability (like a vampire)
 --- @param unit Creature The unit that rises from the death with 1xp level less
 function OnCreatureRebirth(unit)
     local eventData = {}
     eventData.unit = unit
     ProcessEvent("Rebirth",eventData)
+end
+
+function OnCreatureFellIntoAbyss(unit)
+    local eventData = {}
+    eventData.unit = unit
+    ProcessEvent("CreatureFellIntoAbyss",eventData)
 end
 
 --- Called when a slab changed
@@ -135,4 +160,22 @@ function OnRoomOwnerChange(room, old_owner)
     eventData.Room = room
     eventData.old_owner = old_owner
     ProcessEvent("RoomOwnerChange",eventData)
+end
+
+--- Called when a shot hits a thing
+---@param shot Thing the shot hitting something.
+---@param shooter Thing|nil the shooter of the shot.
+---@param target Thing|nil what was hit, will be nil if the shot hit a wall. 
+---@param next_stl_x integer where the shot would have been had it not hit something. Useful if the shot hit a wall.
+---@param next_stl_y integer where the shot would have been had it not hit something. Useful if the shot hit a wall.
+---@param rebound_hit boolean true if the target was under the effect of rebound and the shot was not rebound immune.
+function OnShotHit(shot, shooter, target, next_stl_x, next_stl_y, rebound_hit)
+    local eventData = {}
+    eventData.shot = shot
+    eventData.shooter = shooter
+    eventData.target = target
+    eventData.next_stl_x = next_stl_x
+    eventData.next_stl_y = next_stl_y
+    eventData.rebound_hit = rebound_hit
+    ProcessEvent("ShotHitThing",eventData)
 end

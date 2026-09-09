@@ -26,8 +26,12 @@
 
 #include "config.h"
 #include "config_campaigns.h"
+#include "config_settings.h"
+#include "dungeon_stats.h"
 #include "config_creature.h"
+#include "config_crtrmodel.h"
 #include "config_compp.h"
+#include "sound_manager.h"
 #include "custom_sprites.h"
 #include "front_simple.h"
 #include "frontend.h"
@@ -42,6 +46,8 @@
 #include "game_merge.h"
 #include "frontmenu_ingame_map.h"
 #include "gui_boxmenu.h"
+#include "net_exchange_gameplay.h"
+#include "packets.h"
 #include "keeperfx.hpp"
 #include "api.h"
 #include "lvl_filesdk1.h"
@@ -66,9 +72,62 @@ const char *continue_game_filename="fx1contn.sav";
 const char *saved_game_filename="fx1g%04d.sav";
 const char *packet_filename="fx1rp%04d.pck";
 
-struct CatalogueEntry save_game_catalogue[TOTAL_SAVE_SLOTS_COUNT];
+/* Dynamically-grown savegame catalogue (see game_saves.h): holds one CatalogueEntry per
+ * reachable save slot. It is sized on load to (highest existing slot + 2), min
+ * SAVE_SLOTS_MIN, and grown on demand when writing to a higher slot, so the slot count
+ * is limited only by disk space. */
+struct CatalogueEntry *save_game_catalogue = NULL;
+long save_game_catalogue_count = 0;      // logical length (slots the menus range over)
+static long save_game_catalogue_capacity = 0;  // number of entries actually allocated
 
 int number_of_saved_games;
+
+/** Grow the catalogue so that index slot is valid; any newly added entries are zeroed
+ *  (not in use). Returns false only on allocation failure. */
+static TbBool ensure_catalogue_slot(long slot)
+{
+    if ((slot < 0) || (slot >= SAVE_SLOTS_LIMIT))
+        return false;
+    if (slot >= save_game_catalogue_capacity)
+    {
+        long newcap = slot + 1;
+        struct CatalogueEntry* p = (struct CatalogueEntry*)realloc(save_game_catalogue,
+            newcap * sizeof(struct CatalogueEntry));
+        if (p == NULL)
+        {
+            ERRORLOG("Cannot grow save catalogue to %ld entries", newcap);
+            return false;
+        }
+        memset(&p[save_game_catalogue_capacity], 0,
+            (newcap - save_game_catalogue_capacity) * sizeof(struct CatalogueEntry));
+        save_game_catalogue = p;
+        save_game_catalogue_capacity = newcap;
+    }
+    if (slot >= save_game_catalogue_count)
+        save_game_catalogue_count = slot + 1;
+    return true;
+}
+
+/** Parse the slot index from a savegame filename "fx1gNNNN.sav" (case-insensitive).
+ *  Returns the index, or -1 if the name does not match the expected pattern. */
+static int save_slot_index_from_filename(const char *fname)
+{
+    if (strncasecmp(fname, "fx1g", 4) != 0)
+        return -1;
+    const char* p = fname + 4;
+    if ((*p < '0') || (*p > '9'))
+        return -1;
+    long idx = atol(p);
+    while ((*p >= '0') && (*p <= '9'))
+        p++;
+    if (strcasecmp(p, ".sav") != 0)
+        return -1;
+    if ((idx < 0) || (idx >= SAVE_SLOTS_LIMIT))
+        return -1;
+    return (int)idx;
+}
+
+#define CONTINUE_GAME_FILE_SIZE (CAMPAIGN_FNAME_LEN + sizeof(LevelNumber) + sizeof(struct IntralevelData))
 /******************************************************************************/
 TbBool is_primitive_save_version(long filesize)
 {
@@ -187,7 +246,7 @@ int load_game_chunks(TbFileHandle fhandle, struct CatalogueEntry *centry)
             if (load_catalogue_entry(fhandle, &hdr, centry))
             {
                 chunks_done |= SGF_InfoBlock;
-                if (!change_campaign(centry->campaign_fname)) {
+                if (!change_campaign(CampgnT_Default, centry->campaign_fname)) {
                     ERRORLOG("Unable to load campaign");
                     return GLoad_Failed;
                 }
@@ -198,8 +257,6 @@ int load_game_chunks(TbFileHandle fhandle, struct CatalogueEntry *centry)
                 recheck_all_mod_exist();
                 init_custom_sprites(centry->level_num);
                 load_stats_files();
-                check_and_auto_fix_stats();
-                init_creature_scores();
                 snprintf(high_score_entry, PLAYER_NAME_LENGTH, "%s", centry->player_name);
             }
             break;
@@ -305,7 +362,7 @@ int load_game_chunks(TbFileHandle fhandle, struct CatalogueEntry *centry)
  */
 TbBool save_game(long slot_num)
 {
-    if ((slot_num < 0) || (slot_num >= TOTAL_SAVE_SLOTS_COUNT))
+    if (!ensure_catalogue_slot(slot_num))
     {
         ERRORLOG("Outranged slot index %d",(int)slot_num);
         return false;
@@ -349,7 +406,7 @@ TbBool is_save_game_loadable(long slot_num)
 
 TbBool load_game(long slot_num)
 {
-    if ((slot_num < 0) || (slot_num >= TOTAL_SAVE_SLOTS_COUNT))
+    if (!ensure_catalogue_slot(slot_num))
     {
         ERRORLOG("Outranged slot index %d",(int)slot_num);
         return false;
@@ -405,8 +462,21 @@ TbBool load_game(long slot_num)
     }
     my_player_number = game.local_plyr_idx;
     LbFileClose(fh);
+    // Re-apply creature sound overrides: SGC_GameOrig restored game.conf with
+    // session-specific negative bank indices from the save; fix them to match
+    // the current session's custom bank layout.
+    sound_manager_reapply_creature_sounds();
     snprintf(game.campaign_fname, sizeof(game.campaign_fname), "%s", campaign.fname);
     reinit_level_after_load();
+    initialize_packet_history();
+    clear_packets();
+    process_pause_packet(0, 0);
+    clear_flag(game.operation_flags, GOF_Paused);
+    clear_flag(game.operation_flags, GOF_WorldInfluence);
+    close_main_cheat_menu();
+    close_creature_cheat_menu();
+    close_instance_cheat_menu();
+    close_secondary_cheat_menu();
     output_message(SMsg_GameLoaded, 0);
     panel_map_update(0, 0, game.map_subtiles_x+1, game.map_subtiles_y+1);
     calculate_moon_phase(false,false);
@@ -414,13 +484,17 @@ TbBool load_game(long slot_num)
     struct PlayerInfo* player = get_my_player();
     clear_flag(player->additional_flags, PlaAF_LightningPaletteIsActive);
     clear_flag(player->additional_flags, PlaAF_FreezePaletteIsActive);
-    player->palette_fade_step_pain = 0;
-    player->palette_fade_step_possession = 0;
-    player->lens_palette = 0;
+    local_state.view_type = PVT_None;
+    local_state.palette_fade_step_pain = 0;
+    local_state.palette_fade_step_possession = 0;
+    local_state.lens_palette = 0;
+    local_state.minimap_pos_x = 11;
+    local_state.minimap_pos_y = 11;
+    local_state.minimap_zoom = settings.minimap_zoom;
     // Reinitialize lens first (restores lens_palette pointer from config)
     reinitialise_eye_lens(game.applied_lens_type);
     // Apply the appropriate palette (lens palette if active, otherwise engine default)
-    PaletteSetPlayerPalette(player, player->lens_palette ? player->lens_palette : engine_palette);
+    PaletteSetPlayerPalette(player, local_state.lens_palette ? local_state.lens_palette : engine_palette);
     init_local_cameras(player);
     // Update the lights system state
     light_import_system_state(&game.lightst);
@@ -443,7 +517,7 @@ TbBool load_game(long slot_num)
 int count_valid_saved_games(void)
 {
   number_of_saved_games = 0;
-  for (int i = 0; i < TOTAL_SAVE_SLOTS_COUNT; i++)
+  for (int i = 0; i < save_game_catalogue_count; i++)
   {
       struct CatalogueEntry* centry = &save_game_catalogue[i];
       if ((centry->flags & CEF_InUse) != 0)
@@ -469,7 +543,7 @@ TbBool fill_game_catalogue_entry(struct CatalogueEntry *centry,const char *textn
 
 TbBool fill_game_catalogue_slot(long slot_num,const char *textname)
 {
-    if ((slot_num < 0) || (slot_num >= TOTAL_SAVE_SLOTS_COUNT))
+    if (!ensure_catalogue_slot(slot_num))
     {
         ERRORLOG("Outranged slot index %d",(int)slot_num);
         return false;
@@ -480,7 +554,7 @@ TbBool fill_game_catalogue_slot(long slot_num,const char *textname)
 
 TbBool game_catalogue_slot_disable(struct CatalogueEntry *game_catalg,unsigned int slot_idx)
 {
-  if (slot_idx >= TOTAL_SAVE_SLOTS_COUNT)
+  if (slot_idx >= (unsigned int)save_game_catalogue_count)
     return false;
   clear_flag(game_catalg[slot_idx].flags, CEF_InUse);
   return true;
@@ -512,8 +586,33 @@ TbBool load_catalogue_entry(TbFileHandle fh,struct FileChunkHeader *hdr,struct C
 
 TbBool load_game_save_catalogue(void)
 {
+    // Scan the save directory to find the highest existing slot index, so the catalogue
+    // can be sized to exactly the saves that exist plus one free slot to save into.
+    long highest = -1;
+    struct TbFileEntry fe;
+    char* spec = prepare_file_path(FGrp_Save, "fx1g*.sav");
+    struct TbFileFind* ff = LbFileFindFirst(spec, &fe);
+    if (ff != NULL)
+    {
+        do {
+            int idx = save_slot_index_from_filename(fe.Filename);
+            if (idx > highest)
+                highest = idx;
+        } while (LbFileFindNext(ff, &fe) >= 0);
+        LbFileFindEnd(ff);
+    }
+    long needed = highest + 2;               // used slots + one free slot to save into
+    if (needed < SAVE_SLOTS_MIN)
+        needed = SAVE_SLOTS_MIN;
+    if (needed > SAVE_SLOTS_LIMIT)
+        needed = SAVE_SLOTS_LIMIT;
+    if (!ensure_catalogue_slot(needed - 1))
+        return false;
+    save_game_catalogue_count = needed;      // logical length the menus range over
+
+    // (Re)load metadata for every slot in range; missing files leave a zeroed (free) entry.
     long saves_found = 0;
-    for (long slot_num = 0; slot_num < TOTAL_SAVE_SLOTS_COUNT; slot_num++)
+    for (long slot_num = 0; slot_num < save_game_catalogue_count; slot_num++)
     {
         struct CatalogueEntry* centry = &save_game_catalogue[slot_num];
         memset(centry, 0, sizeof(struct CatalogueEntry));
@@ -545,33 +644,54 @@ short save_continue_game(LevelNumber lvnum)
       set_continue_level_number(lvnum);
     SYNCDBG(6,"Continue set to level %d (loaded is %d)",(int)get_continue_level_number(),(int)get_loaded_level_number());
     char* fname = prepare_file_path(FGrp_Save, continue_game_filename);
-    long fsize = LbFileSaveAt(fname, &game, sizeof(struct Game) + sizeof(struct IntralevelData));
+    TbFileHandle fh = LbFileOpen(fname,Lb_FILE_MODE_NEW);
+    if (!fh)
+    {
+        WARNMSG("Cannot open continue game file \"%s\".", fname);
+        return false;
+    }
+    char cmpgn_fname[CAMPAIGN_FNAME_LEN];
+    memset(cmpgn_fname, 0, sizeof(cmpgn_fname));
+    snprintf(cmpgn_fname, sizeof(cmpgn_fname), "%s", campaign.fname);
+    LevelNumber continue_level_number = get_continue_level_number();
+    short result = false;
+    if (LbFileWrite(fh, cmpgn_fname, sizeof(cmpgn_fname)) == sizeof(cmpgn_fname))
+    if (LbFileWrite(fh, &continue_level_number, sizeof(continue_level_number)) == sizeof(continue_level_number))
     // Appending IntralevelData
-    TbFileHandle fh = LbFileOpen(fname,Lb_FILE_MODE_OLD);
-    LbFileSeek(fh, sizeof(struct Game), Lb_FILE_SEEK_BEGINNING);
-    LbFileWrite(fh, &intralvl, sizeof(struct IntralevelData));
+    if (LbFileWrite(fh, &intralvl, sizeof(struct IntralevelData)) == sizeof(struct IntralevelData))
+        result = true;
     LbFileClose(fh);
-    return (fsize == sizeof(struct Game) + sizeof(struct IntralevelData));
+    return result;
 }
 
-short read_continue_game_part(unsigned char *buf,long pos,long buf_len)
+static short read_continue_game_progress(char *cmpgn_fname, LevelNumber *lvnum, struct IntralevelData *intralevel)
 {
     char* fname = prepare_file_path(FGrp_Save, continue_game_filename);
-    if (LbFileLength(fname) != sizeof(struct Game) + sizeof(struct IntralevelData))
+    int32_t fsize = LbFileLength(fname);
+    if (fsize != (int32_t)CONTINUE_GAME_FILE_SIZE)
     {
         SYNCDBG(7, "No correct .SAV file; there's no continue");
         return false;
-  }
-  TbFileHandle fh = LbFileOpen(fname, Lb_FILE_MODE_READ_ONLY);
-  if (!fh)
-  {
-    SYNCDBG(7,"Can't open .SAV file; there's no continue");
-    return false;
-  }
-  LbFileSeek(fh, pos, Lb_FILE_SEEK_BEGINNING);
-  short result = (LbFileRead(fh, buf, buf_len) == buf_len);
-  LbFileClose(fh);
-  return result;
+    }
+    TbFileHandle fh = LbFileOpen(fname, Lb_FILE_MODE_READ_ONLY);
+    if (!fh)
+    {
+        SYNCDBG(7,"Can't open .SAV file; there's no continue");
+        return false;
+    }
+    short result = false;
+    if (LbFileRead(fh, cmpgn_fname, CAMPAIGN_FNAME_LEN) == CAMPAIGN_FNAME_LEN)
+    if (LbFileRead(fh, lvnum, sizeof(*lvnum)) == sizeof(*lvnum))
+    if (LbFileRead(fh, intralevel, sizeof(struct IntralevelData)) == sizeof(struct IntralevelData))
+        result = true;
+    LbFileClose(fh);
+    if (!result)
+    {
+        SYNCDBG(7, "No correct .SAV file; there's no continue");
+        return false;
+    }
+    cmpgn_fname[CAMPAIGN_FNAME_LEN-1] = '\0';
+    return true;
 }
 
 /**
@@ -583,56 +703,38 @@ TbBool continue_game_available(void)
     LevelNumber lvnum;
     SYNCDBG(6,"Starting");
     char cmpgn_fname[CAMPAIGN_FNAME_LEN];
-    long offset = offsetof(struct Game, campaign_fname);
-    if (!read_continue_game_part((unsigned char*)cmpgn_fname, offset, CAMPAIGN_FNAME_LEN)) {
+    struct IntralevelData intralevel;
+    if (!read_continue_game_progress(cmpgn_fname, &lvnum, &intralevel)) {
         WARNLOG("Can't read continue game file head");
         return false;
     }
-    cmpgn_fname[CAMPAIGN_FNAME_LEN-1] = '\0';
-    offset = offsetof(struct Game, continue_level_number);
-    if (!read_continue_game_part((unsigned char*)&lvnum, offset, sizeof(lvnum))) {
-        WARNLOG("Can't read continue game file head");
-        return false;
-    }
-    if (!change_campaign(cmpgn_fname))
+    if (!change_campaign(CampgnT_Campaign, cmpgn_fname))
     {
         ERRORLOG("Unable to load campaign");
         return false;
     }
-    if (is_singleplayer_like_level(lvnum))
-    {
-        set_continue_level_number(lvnum);
-    }
-    lvnum = get_continue_level_number();
-    if (is_singleplayer_like_level(lvnum))
-    {
-        SYNCDBG(7,"Continue to level %d is available",(int)lvnum);
-        return true;
-    } else
+    if (!is_singleplayer_like_level(lvnum))
     {
         SYNCDBG(7,"Level %d from continue file is not single player",(int)lvnum);
         return false;
     }
+    set_continue_level_number(lvnum);
+    SYNCDBG(7,"Continue to level %d is available",(int)lvnum);
+    return true;
 }
 
 short load_continue_game(void)
 {
     LevelNumber lvnum;
     char cmpgn_fname[CAMPAIGN_FNAME_LEN];
-    long offset = offsetof(struct Game, campaign_fname);
-    if (!read_continue_game_part((unsigned char*)cmpgn_fname, offset, CAMPAIGN_FNAME_LEN)) {
+    struct IntralevelData intralevel;
+    if (!read_continue_game_progress(cmpgn_fname, &lvnum, &intralevel)) {
         WARNLOG("Can't read continue game file head");
         return false;
     }
-    cmpgn_fname[CAMPAIGN_FNAME_LEN-1] = '\0';
-    if (!change_campaign(cmpgn_fname))
+    if (!change_campaign(CampgnT_Campaign, cmpgn_fname))
     {
         ERRORLOG("Unable to load campaign");
-        return false;
-    }
-    offset = offsetof(struct Game, continue_level_number);
-    if (!read_continue_game_part((unsigned char*)&lvnum, offset, sizeof(lvnum))) {
-        WARNLOG("Can't read continue game file head");
         return false;
     }
     if (!is_singleplayer_like_level(lvnum))
@@ -642,8 +744,7 @@ short load_continue_game(void)
     }
     set_continue_level_number(lvnum);
     // Restoring intralevel data
-    read_continue_game_part((unsigned char *)&intralvl, sizeof(struct Game),
-        sizeof(struct IntralevelData));
+    memcpy(&intralvl, &intralevel, sizeof(struct IntralevelData));
     snprintf(game.campaign_fname, sizeof(game.campaign_fname), "%s", campaign.fname);
     update_extra_levels_visibility();
     JUSTMSG("Continued level %d from %s", lvnum, campaign.name);

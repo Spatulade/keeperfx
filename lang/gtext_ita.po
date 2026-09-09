@@ -2960,6 +2960,7 @@ msgid "Play Intro"
 msgstr "Esegui Introduzione"
 
 #: guitext:350
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Multiplayer Menu"
 msgstr "Menu multigiocatore"
@@ -3185,6 +3186,7 @@ msgid "Testers"
 msgstr "Collaudatori"
 
 #: guitext:395
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Game Lobbies"
 msgstr "Lobby di gioco"
@@ -3195,6 +3197,7 @@ msgid "Name"
 msgstr "Nome"
 
 #: guitext:397
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Game Modes"
 msgstr "Modalità di gioco"
@@ -3205,11 +3208,13 @@ msgid "Messages"
 msgstr "Messaggi"
 
 #: guitext:399
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Create Lobby"
 msgstr "Crea lobby"
 
 #: guitext:400
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Join Lobby"
 msgstr "Entra nella lobby"
@@ -3220,6 +3225,7 @@ msgid "Start Game"
 msgstr "Comincia Partita"
 
 #: guitext:402
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Online Lobbies"
 msgstr "Lobby online"
@@ -5900,16 +5906,19 @@ msgid "4 Players"
 msgstr "4 Giocatori"
 
 #: guitext:874
+#, fuzzy
 msgctxt "Menu interface, Network service item"
 msgid "Online"
 msgstr "Online"
 
 #: guitext:875
+#, fuzzy
 msgctxt "Menu interface, Network service item"
 msgid "LAN"
 msgstr "LAN"
 
 #: guitext:876
+#, fuzzy
 msgctxt "Menu interface, Network service item"
 msgid "Skirmish"
 msgstr "Schermaglia"
@@ -6666,51 +6675,72 @@ msgid "Health: The maximum number of health points for this creature."
 msgstr "Salute: la quantità massima di punti salute per questa creatura."
 
 #: guitext:967
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Toggle Message"
-msgstr ""
+msgstr "Attiva/disattiva messaggio"
 
 #: guitext:968
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Return to Free Play levels"
-msgstr ""
+msgstr "Ritorna ai livelli di gioco libero"
 
 #: guitext:969
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Map Packs"
-msgstr ""
+msgstr "Pacchetti mappe"
 
 #: guitext:970
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "The Deeper Dungeons"
-msgstr ""
+msgstr "Le Prigioni Profonde"
 
 #: guitext:971
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Standard Levels"
-msgstr ""
+msgstr "Livelli standard"
 
 #: guitext:972
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Classic Levels"
-msgstr ""
+msgstr "Livelli classici"
 
 #: guitext:973
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Legacy Levels"
-msgstr ""
+msgstr "Livelli legacy"
 
 #: guitext:974
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Personal Levels"
-msgstr ""
+msgstr "Livelli personali"
 
 #: guitext:975
+#, fuzzy
 msgctxt "Menu interface item"
 msgid "Lost Levels"
-msgstr ""
+msgstr "Livelli perduti"
 
-#: guitext:976 guitext:977 guitext:978 guitext:979 guitext:980
+#: guitext:976
+#, fuzzy
+msgctxt "Menu interface item"
+msgid "Modern Levels"
+msgstr "Livelli moderni"
+
+#: guitext:977
+#, fuzzy
+msgctxt "Menu interface item"
+msgid "Bullfrog Levels"
+msgstr "Livelli Bullfrog"
+
+#: guitext:978 guitext:979 guitext:980
 msgctxt "Unused"
 msgid "Moo3"
 msgstr ""
@@ -6936,7 +6966,7 @@ msgstr ""
 
 #: guitext:1024
 msgctxt "Menu interface item"
-msgid "Good Campaign"
+msgid "The Good Guys"
 msgstr ""
 
 #: guitext:1025
@@ -7247,16 +7277,19 @@ msgid "Keeper"
 msgstr "Keeper"
 
 #: guitext:1083
+#, fuzzy
 msgctxt "Game controls"
 msgid "Screen Capture"
 msgstr "Registra Schermo"
 
 #: guitext:1084
+#, fuzzy
 msgctxt "Game controls"
 msgid "Screenshot"
 msgstr "Cattura Schermo"
 
 #: guitext:1085
+#, fuzzy
 msgctxt "Game controls"
 msgid "Frame Skip Increase"
 msgstr "Aumenta Salto Frame"
@@ -7371,3 +7404,71 @@ msgctxt "Game controls"
 msgid "Teleport Default"
 msgstr "Teletrasporto Predefinito"
 
+#: guitext:1110
+msgctxt "Menu interface item"
+msgid "Multiplayer Map Packs"
+msgstr ""
+
+#: guitext:1111
+msgctxt "Menu interface item"
+msgid "Return to Lobby"
+msgstr ""
+
+#: guitext:1112
+msgctxt "In-game message"
+msgid "You have been defeated. As host, keep the game running until the match concludes."
+msgstr "Sei stato sconfitto. Come host, mantieni il gioco in esecuzione finché la partita non si conclude."
+
+
+#: guitext:1113
+msgctxt "Network game message"
+msgid "Verify /fxdata/ is the same across all PCs."
+msgstr "Verifica che /fxdata/ sia uguale su tutti i PC."
+
+#: guitext:1114
+msgctxt "Network game message"
+msgid "WARNING: Custom sprite mismatch with %s!"
+msgstr "ATTENZIONE: sprite personalizzati non corrispondenti con %s!"
+
+#: guitext:1115
+msgctxt "Network game message"
+msgid "I am the computer now!"
+msgstr "Ora il computer prende il controllo!"
+
+#: guitext:1116
+msgctxt "Network game message"
+msgid "%s has left the game."
+msgstr "%s ha lasciato la partita."
+
+#: guitext:1117
+msgctxt "Network game message"
+msgid "%s has disconnected."
+msgstr "%s si è disconnesso."
+
+#: guitext:1118
+msgctxt "Unused"
+msgid "unused"
+msgstr "unused"
+
+#: guitext:1119
+msgctxt "Network game message"
+msgid "Network connection to host lost"
+msgstr "Connessione di rete con l'host persa"
+
+#: guitext:1120
+#, fuzzy
+msgctxt "In-game message"
+msgid "/fxdata/%.39s was not loaded."
+msgstr "/fxdata/%.39s non è stato caricato."
+
+#: guitext:1121
+#, fuzzy
+msgctxt "In-game message"
+msgid "Please install it as a mod inside the /mods/ folder."
+msgstr "Installalo come mod nella cartella /mods/."
+
+#: guitext:1122
+#, fuzzy
+msgctxt "Network game message"
+msgid "Lost connection to server"
+msgstr "Connessione al server persa."
