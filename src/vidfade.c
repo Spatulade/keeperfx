@@ -32,6 +32,7 @@
 #include "front_simple.h"
 #include "player_data.h"
 #include "player_instances.h"
+#include "local_camera.h"
 #include "keeperfx.hpp"
 #include "config_keeperfx.h"
 #include "post_inc.h"
@@ -227,9 +228,11 @@ void ProperFadePalette(unsigned char *pal, long fade_steps, enum TbPaletteFadeFl
     } else*/
     if (lbAdvancedFade)
     {
+        RendererPreserveFadeCache(1);
         TbClockMSec latest_loop_time = LbTimerClock();
         while (LbPaletteFade(pal, fade_steps, Lb_PALETTE_FADE_OPEN) < fade_steps)
         {
+          RendererPresentFrame();
           if (!is_key_pressed(KC_SPACE,KMod_DONTCARE) &&
               !is_key_pressed(KC_ESCAPE,KMod_DONTCARE) &&
               !is_key_pressed(KC_RETURN,KMod_DONTCARE) &&
@@ -239,6 +242,8 @@ void ProperFadePalette(unsigned char *pal, long fade_steps, enum TbPaletteFadeFl
             LbSleepUntil(latest_loop_time);
           }
         }
+        RendererPresentFrame();
+        RendererPreserveFadeCache(0);
     } else
     if (pal != NULL)
     {
@@ -259,15 +264,19 @@ void ProperForcedFadePalette(unsigned char *pal, long fade_steps, enum TbPalette
     }
     if (lbAdvancedFade)
     {
+        RendererPreserveFadeCache(1);
         TbClockMSec latest_loop_time = LbTimerClock();
         while (LbPaletteFade(pal, fade_steps, Lb_PALETTE_FADE_OPEN) < fade_steps)
         {
+          RendererPresentFrame();
           latest_loop_time += lbFadeDelay;
 
           if (flag_is_set(start_params.startup_flags, (SFlg_Legal|SFlg_FX))) {
               LbSleepUntil(latest_loop_time);
           }
         }
+        RendererPresentFrame();
+        RendererPreserveFadeCache(0);
     } else
     if (pal != NULL)
     {
@@ -279,12 +288,12 @@ void ProperForcedFadePalette(unsigned char *pal, long fade_steps, enum TbPalette
     }
 }
 
-long PaletteFadePlayer(struct PlayerInfo *player)
+long PaletteFadePlayer(const struct PlayerInfo *player)
 {
-    if (!is_my_player(player))
+    if (player != get_displayed_player())
         return 0;
+    const struct UserState *ustate = get_user_state(get_displayed_user());
     long i;
-    unsigned char palette[PALETTE_SIZE];
     // Find the fade step
     if ((local_state.palette_fade_step_pain != 0) && (local_state.palette_fade_step_possession != 0))
     {
@@ -304,31 +313,13 @@ long PaletteFadePlayer(struct PlayerInfo *player)
   if (i >= 120)
     i = 120;
   long step = 120 - i;
-  // Create the new palette
-  for (i=0; i < PALETTE_COLORS; i++)
-  {
-      unsigned char* src = &local_state.main_palette[3 * i];
-      unsigned char* dst = &palette[3 * i];
-      unsigned long pix = ((step * (((long)src[0]) - 63)) / 120) + 63;
-      if (pix > 63)
-          pix = 63;
-      dst[0] = pix;
-      pix = (step * ((long)src[1])) / 120;
-      if (pix > 63)
-          pix = 63;
-      dst[1] = pix;
-      pix = (step * ((long)src[2])) / 120;
-      if (pix > 63)
-          pix = 63;
-      dst[2] = pix;
-  }
   // Update the fade step
   if (local_state.palette_fade_step_pain > 0)
     local_state.palette_fade_step_pain--;
-  if ((local_state.palette_fade_step_possession == 0) || (player->instance_num == PI_UnusedSlot18) || (player->instance_num == PI_UnusedSlot17))
+  if (local_state.palette_fade_step_possession == 0 || ustate->instance_num == PI_UnusedSlot18 || ustate->instance_num == PI_UnusedSlot17)
   {
   } else
-  if ((player->instance_num == PI_DirctCtrl) || (player->instance_num == PI_PsngrCtrl))
+  if (ustate->instance_num == PI_DirctCtrl || ustate->instance_num == PI_PsngrCtrl)
   {
     if (local_state.palette_fade_step_possession <= 12)
       local_state.palette_fade_step_possession++;
@@ -337,15 +328,16 @@ long PaletteFadePlayer(struct PlayerInfo *player)
     if (local_state.palette_fade_step_possession > 0)
       local_state.palette_fade_step_possession--;
   }
-  // Set the palette to screen
-  LbScreenWaitVbi();
-  RendererPaletteSet(palette);
+  if (is_observer_camera_active()) {
+    step = 120;
+  }
+  RendererApplyPossessionPalette(step, local_state.main_palette);
   return step;
 }
 
 void PaletteApplyPainToPlayer(struct PlayerInfo *player, long intense)
 {
-    if (!is_my_player(player))
+    if (player != get_displayed_player())
         return;
     long i = local_state.palette_fade_step_pain + intense;
     if (i < 1)

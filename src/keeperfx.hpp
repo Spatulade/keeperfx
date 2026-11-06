@@ -20,6 +20,7 @@
 #define DK_KEEPERFX_H
 
 #include "globals.h"
+#include "net_main.h"
 #include "bflib_video.h"
 #include "bflib_keybrd.h"
 #include "bflib_filelst.h"
@@ -67,7 +68,7 @@ extern "C" {
 #define SPELL_POINTER_GROUPS   14
 #define ZOOM_KEY_ROOMS_COUNT   15
 
-#define CMDLINE_OVERRIDES      4
+#define CMDLINE_OVERRIDES      5
 
 /** Command Line overrides for config settings. Checked after the config file is loaded. */
 enum CmdLineOverrides {
@@ -75,11 +76,12 @@ enum CmdLineOverrides {
     Clo_CDMusic,
     Clo_GameTurns,
     Clo_FramesPerSecond,
+    Clo_Renderer, /**< Special: handled before the renderer is initialised. */
 };
 
 enum ModeFlags {
     MFlg_IsDemoMode         =  0x01,
-    MFlg_EyeLensReady       =  0x02,
+    MFlg_Unusedparam02      =  0x02,
     MFlg_Unusedparam04      =  0x04,
     MFlg_DeadBackToPool     =  0x08,
     MFlg_NoCdMusic          =  0x10, // unused
@@ -135,12 +137,14 @@ struct StartupParameters {
     int32_t num_fps_draw_secondary;
     TbBool packet_save_enable;
     TbBool packet_load_enable;
-    char packet_fname[150];
+    char packet_fname[OS_ABSPATH_SIZE];
     unsigned char packet_checksum_verify;
-    int frame_skip;
+    int fast_forward;
     char selected_campaign[CMDLN_MAXLEN+1];
     TbBool overrides[CMDLINE_OVERRIDES];
     char config_file[CMDLN_MAXLEN+1];
+    char *config_overrides; /**< extra lines from -cfg args */
+    int renderer_type; /**< RendererType value from -opengl; only meaningful when overrides[Clo_Renderer] is set. */
     GameTurn pause_at_gameturn;
     unsigned char startup_flags;
     TbBool skip_heart_zoom;
@@ -208,6 +212,7 @@ extern struct StartupParameters start_params;
 short setup_game(void);
 void game_loop(void);
 void update(void);
+void update_gameplay_delta_time(void);
 
 TbBool can_thing_be_queried(struct Thing *thing, PlayerNumber plyr_idx);
 TbBool all_dungeons_destroyed(const struct PlayerInfo *win_player);
@@ -217,7 +222,8 @@ void toggle_hero_health_flowers(void);
 
 
 TbBool toggle_computer_player(PlayerNumber plyr_idx);
-void PaletteSetPlayerPalette(struct PlayerInfo *player, unsigned char *pal);
+void PaletteSetUserPalette(NetUserId user, unsigned char *pal);
+void PaletteSetPlayerPalette(const struct PlayerInfo *player, unsigned char *pal);
 void clear_creature_pool(void);
 void reset_creature_max_levels(void);
 void reset_script_timers_and_flags(void);
@@ -245,10 +251,9 @@ void lightning_modify_palette(struct Thing *thing);
 
 unsigned long seed_check_random(unsigned long range, uint32_t *seed, const char *func_name, unsigned long place);
 void place_single_slab_type_on_map(SlabKind slbkind, MapSlabCoord slb_x, MapSlabCoord slb_y, PlayerNumber plyr_idx);
-void turn_off_query(PlayerNumber plyr_idx);
+void turn_off_query(NetUserId user);
 TbBool set_gamma(char corrlvl, TbBool do_set);
-void level_lost_go_first_person(PlayerNumber plyr_idx);
-short winning_player_quitting(struct PlayerInfo *player, int32_t *plyr_count);
+void level_lost_go_first_person(NetUserId user);
 short lose_level(struct PlayerInfo *player);
 short resign_level(struct PlayerInfo *player);
 short complete_level(struct PlayerInfo *player);
@@ -268,19 +273,18 @@ int dump_all_held_things_on_map(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapS
 void dump_thing_held_by_any_player(struct Thing *thing);
 
 void instant_instance_selected(CrInstance check_inst_id);
-void centre_engine_window(void);
-void change_engine_window_relative_size(long w_delta, long h_delta);
 void initialise_map_collides(void);
 void initialise_map_health(void);
 void setup_mesh_randomizers(void);
 void setup_stuff(void);
 void give_shooter_drained_health(struct Thing *shooter, HitPoints health_delta);
-long get_foot_creature_has_down(struct Thing *thing);
 void init_seeds();
 
 
 TbBool startup_saved_packet_game(void);
 void reinit_level_after_load(void);
+void rederive_local_state(void);
+void update_local_view_effects(void);
 void redetect_screen_refresh_rate_for_draw();
 
 

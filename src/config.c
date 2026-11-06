@@ -387,11 +387,11 @@ static int64_t get_datatype_min(uchar type)
         case dt_uint:
             return 0;
         case dt_long:
-            return INT32_MIN;
+            return LONG_MIN;
         case dt_ulong:
             return 0;
         case dt_longlong:
-            return INT64_MIN;
+            return LLONG_MIN;
         case dt_ulonglong:
             return 0;
         default:
@@ -420,13 +420,13 @@ static int64_t get_datatype_max(uchar type)
         case dt_uint:
             return UINT_MAX;
         case dt_long:
-            return INT32_MAX;
+            return LONG_MAX;
         case dt_ulong:
-            return UINT32_MAX;
+            return ULONG_MAX > INT64_MAX ? INT64_MAX : (int64_t)ULONG_MAX;
         case dt_longlong:
-            return INT64_MAX;
+            return LLONG_MAX;
         case dt_ulonglong:
-            return UINT64_MAX;
+            return ULLONG_MAX;
         default:
             break;
     }
@@ -627,7 +627,7 @@ void assign_animid(const struct NamedField* named_field, int64_t value, const st
 {
     if (flag_is_set(flags,ccf_SplitExecution))
     {
-        short anim_id = get_anim_id_(script_strval(value));
+        int32_t anim_id = get_anim_id_(script_strval(value));
         assign_default(named_field,anim_id,named_fields_set,idx,src_str,flags);
     }
     else
@@ -745,6 +745,9 @@ void assign_default(const struct NamedField* named_field, int64_t value, const s
             *(unsigned char*)field = (unsigned char)value;
         break;
     case dt_schar:
+        if (value < SCHAR_MIN || value > SCHAR_MAX)
+            NAMFIELDWRNLOG("Value out of range for signed char: %" PRId64, value);
+        else
             *(signed char*)field = (signed char)value;
         break;
     case dt_char:
@@ -778,6 +781,7 @@ void assign_default(const struct NamedField* named_field, int64_t value, const s
             *(unsigned int*)field = (unsigned int)value;
         break;
     case dt_long:
+        /* these need to stay LONG_MIN and MAX, as they arrive at this path trough generics so on windows int32_t might arrive here, on linux int64_t might*/
         if (value < LONG_MIN || value > LONG_MAX)
             NAMFIELDWRNLOG("Value out of range for signed long: %" PRId64, value);
         else
@@ -790,7 +794,7 @@ void assign_default(const struct NamedField* named_field, int64_t value, const s
             *(unsigned long *)field = (unsigned long)value;
         break;
     case dt_longlong:
-        if (value < INT64_MIN || value > INT64_MAX)
+        if (value < LLONG_MIN || value > LLONG_MAX)
             NAMFIELDWRNLOG("Value out of range for signed long long: %" PRId64, value);
         else {
             /* Use memcpy to avoid ARM STRD strict-alignment fault (ARMv7 STRD requires
@@ -1013,6 +1017,7 @@ TbBool parse_named_field_block(const char *buf, long len, const char *config_tex
 void set_defaults(const struct NamedFieldSet* named_fields_set, const char *config_textname)
 {
   memset(named_fields_set->get_struct_base(), 0, named_fields_set->struct_size * named_fields_set->max_count);
+  *named_fields_set->get_count() = 0;
 
   const struct NamedField* name_NamedField = NULL;
 
@@ -1253,8 +1258,8 @@ long get_rid(const struct NamedCommand *desc, const char *itmname)
   }
   if (strcasecmp("RANDOM", itmname) == 0)
   {
-      i = (rand() % i);
-      return desc[i].num;
+      int32_t idx = (int32_t)LbRandomSeries((uint32_t)i, &game.action_random_seed, __func__, __LINE__);
+      return desc[idx].num;
   }
   return -1;
 }
@@ -1388,6 +1393,10 @@ static char *_resolve_file_path_internal(char *dst, size_t dst_size,
       mdir=keeper_runtime_directory;
       sdir="multiplayer";
       break;
+  case FGrp_Replays:
+      mdir=keeper_runtime_directory;
+      sdir="replays";
+      break;
   default:
       mdir=keeper_runtime_directory;
       sdir=NULL;
@@ -1446,7 +1455,7 @@ static char *_resolve_file_path_internal(char *dst, size_t dst_size,
  */
 char *get_game_file_path(short fgroup, const char *fname)
 {
-  static char ffullpath[4096];
+  static char ffullpath[FULLPATH_SIZE];
   return _resolve_file_path_internal(ffullpath, sizeof(ffullpath), NULL, fgroup, fname);
 }
 
@@ -1457,7 +1466,7 @@ char *get_game_file_path(short fgroup, const char *fname)
  */
 char *get_mod_file_path(const char *mod_dir, short fgroup, const char *fname)
 {
-  static char ffullpath[4096];
+  static char ffullpath[FULLPATH_SIZE];
   return _resolve_file_path_internal(ffullpath, sizeof(ffullpath), mod_dir, fgroup, fname);
 }
 
@@ -1473,7 +1482,7 @@ char *get_game_file_path_fmt(short fgroup, const char *fmt_str, ...)
   vsnprintf(fname, sizeof(fname), fmt_str, val);
   va_end(val);
   
-  static char ffullpath[2048];
+  static char ffullpath[FULLPATH_SIZE];
   return _resolve_file_path_internal(ffullpath, sizeof(ffullpath), NULL, fgroup, fname);
 }
 
@@ -1490,7 +1499,7 @@ char *get_mod_file_path_fmt(const char *mod_dir, short fgroup, const char *fmt_s
   vsnprintf(fname, sizeof(fname), fmt_str, val);
   va_end(val);
   
-  static char ffullpath[4096];
+  static char ffullpath[FULLPATH_SIZE];
   return _resolve_file_path_internal(ffullpath, sizeof(ffullpath), mod_dir, fgroup, fname);
 }
 
@@ -1559,7 +1568,7 @@ unsigned char *load_data_file_to_buffer(int32_t *ldsize, short fgroup, const cha
   va_start(arg, fmt_str);
   char fname[255] = "";
   vsnprintf(fname, sizeof(fname), fmt_str, arg);
-  char ffullpath[2048];
+  char ffullpath[FULLPATH_SIZE];
   prepare_file_path_buf(ffullpath, sizeof(ffullpath), fgroup, fname);
   va_end(arg);
   // Load the file
@@ -1844,16 +1853,54 @@ TbBool setup_campaign_credits_data(struct GameCampaign *campgn)
   return result;
 }
 
-short is_bonus_level(LevelNumber lvnum)
+/**
+ * Returns index of given level in the campaign's single_levels, or -1.
+ */
+int campaign_singleplayer_level_index(const struct GameCampaign *campgn, LevelNumber lvnum)
 {
-  if (lvnum < 1) return false;
+  if (lvnum < 1) return -1;
   for (int i = 0; i < CAMPAIGN_LEVELS_COUNT; i++)
   {
-    if (campaign.bonus_levels[i] == lvnum)
-    {
-        SYNCDBG(7,"Level %d identified as bonus",lvnum);
-        return true;
-    }
+    if (campgn->single_levels[i] == lvnum)
+        return i;
+  }
+  return -1;
+}
+
+/**
+ * Returns first index of given level in the campaign's bonus_levels, or -1.
+ */
+int campaign_bonus_level_index(const struct GameCampaign *campgn, LevelNumber lvnum)
+{
+  if (lvnum < 1) return -1;
+  for (int i = 0; i < CAMPAIGN_LEVELS_COUNT; i++)
+  {
+    if (campgn->bonus_levels[i] == lvnum)
+        return i;
+  }
+  return -1;
+}
+
+/**
+ * Returns index of given level in the campaign's extra_levels, or -1.
+ */
+int campaign_extra_level_index(const struct GameCampaign *campgn, LevelNumber lvnum)
+{
+  if (lvnum < 1) return -1;
+  for (int i = 0; i < EXTRA_LEVELS_COUNT; i++)
+  {
+    if (campgn->extra_levels[i] == lvnum)
+        return i;
+  }
+  return -1;
+}
+
+short is_bonus_level(LevelNumber lvnum)
+{
+  if (campaign_bonus_level_index(&campaign, lvnum) >= 0)
+  {
+      SYNCDBG(7,"Level %d identified as bonus",lvnum);
+      return true;
   }
   SYNCDBG(7,"Level %d not recognized as bonus",lvnum);
   return false;
@@ -1861,14 +1908,10 @@ short is_bonus_level(LevelNumber lvnum)
 
 short is_extra_level(LevelNumber lvnum)
 {
-  if (lvnum < 1) return false;
-  for (int i = 0; i < EXTRA_LEVELS_COUNT; i++)
+  if (campaign_extra_level_index(&campaign, lvnum) >= 0)
   {
-      if (campaign.extra_levels[i] == lvnum)
-      {
-          SYNCDBG(7,"Level %d identified as extra",lvnum);
-          return true;
-      }
+      SYNCDBG(7,"Level %d identified as extra",lvnum);
+      return true;
   }
   SYNCDBG(7,"Level %d not recognized as extra",lvnum);
   return false;
@@ -1899,13 +1942,7 @@ int storage_index_for_bonus_level(LevelNumber bn_lvnum)
  */
 int array_index_for_singleplayer_level(LevelNumber sp_lvnum)
 {
-  if (sp_lvnum < 1) return -1;
-  for (int i = 0; i < CAMPAIGN_LEVELS_COUNT; i++)
-  {
-    if (campaign.single_levels[i] == sp_lvnum)
-        return i;
-  }
-  return -1;
+  return campaign_singleplayer_level_index(&campaign, sp_lvnum);
 }
 
 /**
@@ -2224,13 +2261,13 @@ static void load_config_for_mod(const struct ConfigFileData* file_data, unsigned
 
     const char* conf_fname = file_data->filename;
     const struct ModExistState *mod_state = &mod_item->state;
-    char* fname = NULL;
+    char fname[FULLPATH_SIZE] = "";
     char mod_dir[256] = {0};
     sprintf(mod_dir, "%s/%s", MODS_DIR_NAME, mod_item->name);
 
     if (mod_state->fx_data)
     {
-        fname = prepare_file_path_mod(mod_dir, FGrp_FxData, conf_fname);
+        prepare_file_path_buf_mod(fname, sizeof(fname), mod_dir, FGrp_FxData, conf_fname);
         if (strlen(fname) > 0)
         {
             file_data->load_func(fname, flags);
@@ -2239,7 +2276,7 @@ static void load_config_for_mod(const struct ConfigFileData* file_data, unsigned
 
     if (mod_state->cmpg_config)
     {
-        fname = prepare_file_path_mod(mod_dir, FGrp_CmpgConfig, conf_fname);
+        prepare_file_path_buf_mod(fname, sizeof(fname), mod_dir, FGrp_CmpgConfig, conf_fname);
         if (strlen(fname) > 0)
         {
             file_data->load_func(fname,flags);
@@ -2248,8 +2285,10 @@ static void load_config_for_mod(const struct ConfigFileData* file_data, unsigned
 
     if (mod_state->cmpg_lvls)
     {
-        fname = get_mod_file_path_fmt(mod_dir, FGrp_CmpgLvls, "map%05lu.%s", get_selected_level_number(), conf_fname);
-        if (fname && strlen(fname) > 0)
+        char map_fname[DISKPATH_SIZE] = "";
+        snprintf(map_fname, sizeof(map_fname), "map%05d.%s", (int)get_level_number(), conf_fname);
+        prepare_file_path_buf_mod(fname, sizeof(fname), mod_dir, FGrp_CmpgLvls, map_fname);
+        if (strlen(fname) > 0)
         {
             file_data->load_func(fname,flags);
         }
@@ -2280,7 +2319,8 @@ TbBool load_config(const struct ConfigFileData* file_data, unsigned short flags)
 
     const char* conf_fname = file_data->filename;
 
-    char* fname = prepare_file_path(FGrp_FxData, conf_fname);
+    char fname[FULLPATH_SIZE] = "";
+    prepare_file_path_buf(fname, sizeof(fname), FGrp_FxData, conf_fname);
     TbBool result = file_data->load_func(fname, flags);
 
     if (mods_conf.after_base_cnt > 0)
@@ -2288,7 +2328,7 @@ TbBool load_config(const struct ConfigFileData* file_data, unsigned short flags)
         load_config_for_mod_list(file_data, flags, mods_conf.after_base_item, mods_conf.after_base_cnt);
     }
 
-    fname = prepare_file_path(FGrp_CmpgConfig, conf_fname);
+    prepare_file_path_buf(fname, sizeof(fname), FGrp_CmpgConfig, conf_fname);
     if (strlen(fname) > 0)
     {
         file_data->load_func(fname,flags|CnfLd_AcceptPartial|CnfLd_IgnoreErrors);
@@ -2299,8 +2339,10 @@ TbBool load_config(const struct ConfigFileData* file_data, unsigned short flags)
         load_config_for_mod_list(file_data, flags, mods_conf.after_campaign_item, mods_conf.after_campaign_cnt);
     }
 
-    fname = get_game_file_path_fmt(FGrp_CmpgLvls, "map%05lu.%s", get_selected_level_number(), conf_fname);
-    if (fname && strlen(fname) > 0)
+    char map_fname[DISKPATH_SIZE] = "";
+    snprintf(map_fname, sizeof(map_fname), "map%05d.%s", (int)get_level_number(), conf_fname);
+    prepare_file_path_buf(fname, sizeof(fname), FGrp_CmpgLvls, map_fname);
+    if (strlen(fname) > 0)
     {
         file_data->load_func(fname,flags|CnfLd_AcceptPartial|CnfLd_IgnoreErrors);
     }

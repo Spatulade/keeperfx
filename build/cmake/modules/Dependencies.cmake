@@ -13,8 +13,18 @@ set(KFX_DEPS_BASE "https://github.com/dkfans/kfx-deps/releases/download")
 set(D "${CMAKE_BINARY_DIR}/deps")
 set(KFX_CENTITOML_SRC "${CMAKE_SOURCE_DIR}/deps/centitoml")
 
-# kfx_fetch(<dir> <url>): download + extract into <builddir>/deps/<dir>/ once.
+# GL renderer backend: always built.
+find_package(OpenGL REQUIRED)
+
+# Vendored glad loader -- outside src/, so BuildTargets' glob won't pick it up.
+add_library(glad STATIC "${CMAKE_SOURCE_DIR}/deps/glad/src/glad.c")
+target_include_directories(glad PUBLIC "${CMAKE_SOURCE_DIR}/deps/glad/include")
+
+# kfx_fetch(<dir> <url> [SKIP_EXAMPLES]): download + extract into <builddir>/deps/<dir>/ once.
+# SKIP_EXAMPLES leaves out libexec/, where the SDL dev packages put their example programs. The
+# build doesn't use them, and Windows Defender reports some of them as malware (a false positive).
 function(kfx_fetch dir url)
+    cmake_parse_arguments(F "SKIP_EXAMPLES" "" "" ${ARGN})
     set(_tgz "${D}/${dir}.tar.gz")
     set(_dest "${D}/${dir}")
     if(NOT EXISTS "${_dest}")
@@ -27,12 +37,18 @@ function(kfx_fetch dir url)
                 message(FATAL_ERROR "Failed to download ${url}: ${_st}")
             endif()
         endif()
-        execute_process(
-            COMMAND ${CMAKE_COMMAND} -E tar xzf "${_tgz}"
-            WORKING_DIRECTORY "${_dest}"
-            RESULT_VARIABLE _rc)
-        if(NOT _rc EQUAL 0)
-            message(FATAL_ERROR "Failed to extract ${_tgz}")
+        if(F_SKIP_EXAMPLES)
+            file(ARCHIVE_EXTRACT INPUT "${_tgz}" DESTINATION "${_dest}"
+                PATTERNS "*/bin/*" "*/include/*" "*/lib/*" "*/share/*" "*/cmake/*"
+                         "*/.git-hash" "*/INSTALL.md" "*/LICENSE.txt" "*/Makefile" "*/README.md")
+        else()
+            execute_process(
+                COMMAND ${CMAKE_COMMAND} -E tar xzf "${_tgz}"
+                WORKING_DIRECTORY "${_dest}"
+                RESULT_VARIABLE _rc)
+            if(NOT _rc EQUAL 0)
+                message(FATAL_ERROR "Failed to extract ${_tgz}")
+            endif()
         endif()
     endif()
 endfunction()
@@ -48,13 +64,13 @@ if(WIN32)
     # --- SDL3 (prebuilt MinGW dev tarballs; each wraps <name>-<ver>/i686-w64-mingw32/*)
     # SDL_net is intentionally absent: api.c now uses a native Winsock socket
     # layer (SDL3_net is not reliably packaged). See docs SDL3-MIGRATION notes.
-    set(SDL3_VER      3.4.12)
+    set(SDL3_VER      3.4.18)
     set(SDL3_MIX_VER  3.2.4)
-    set(SDL3_IMG_VER  3.4.4)
+    set(SDL3_IMG_VER  3.4.6)
 
-    kfx_fetch(sdl3       "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3_VER}/SDL3-devel-${SDL3_VER}-mingw.tar.gz")
-    kfx_fetch(sdl3_mixer "https://github.com/libsdl-org/SDL_mixer/releases/download/release-${SDL3_MIX_VER}/SDL3_mixer-devel-${SDL3_MIX_VER}-mingw.tar.gz")
-    kfx_fetch(sdl3_image "https://github.com/libsdl-org/SDL_image/releases/download/release-${SDL3_IMG_VER}/SDL3_image-devel-${SDL3_IMG_VER}-mingw.tar.gz")
+    kfx_fetch(sdl3       "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3_VER}/SDL3-devel-${SDL3_VER}-mingw.tar.gz" SKIP_EXAMPLES)
+    kfx_fetch(sdl3_mixer "https://github.com/libsdl-org/SDL_mixer/releases/download/release-${SDL3_MIX_VER}/SDL3_mixer-devel-${SDL3_MIX_VER}-mingw.tar.gz" SKIP_EXAMPLES)
+    kfx_fetch(sdl3_image "https://github.com/libsdl-org/SDL_image/releases/download/release-${SDL3_IMG_VER}/SDL3_image-devel-${SDL3_IMG_VER}-mingw.tar.gz" SKIP_EXAMPLES)
 
     set(SDL3_PREFIX      "${D}/sdl3/SDL3-${SDL3_VER}/i686-w64-mingw32")
     set(SDL3_MIX_PREFIX  "${D}/sdl3_mixer/SDL3_mixer-${SDL3_MIX_VER}/i686-w64-mingw32")
@@ -86,7 +102,6 @@ if(WIN32)
     kfx_fetch(astronomy  "${KFX_DEPS_BASE}/astronomy_fix/astronomy-mingw32.tar.gz")
     kfx_fetch(centijson  "${KFX_DEPS_BASE}/initial/centijson-mingw32.tar.gz")
     kfx_fetch(ffmpeg     "${KFX_DEPS_BASE}/initial/ffmpeg-mingw32.tar.gz")
-    kfx_fetch(openal     "${KFX_DEPS_BASE}/2024-11-14/openal-mingw32.tar.gz")
     kfx_fetch(luajit     "${KFX_DEPS_BASE}/20250418/luajit-mingw32.tar.gz")
     kfx_fetch(miniupnpc  "${KFX_DEPS_BASE}/20260102/miniupnpc-mingw32.tar.gz")
     kfx_fetch(libnatpmp  "${KFX_DEPS_BASE}/20260102/libnatpmp-mingw32.tar.gz")
@@ -100,8 +115,22 @@ if(WIN32)
     kfx_imported(zlib_static       "${D}/zlib/libz.a"                "${D}/zlib/include")
     kfx_imported(minizip_static    "${D}/zlib/libminizip.a"          "${D}/zlib/include")
     target_link_libraries(minizip_static INTERFACE zlib_static)
-    kfx_imported(openal_static     "${D}/openal/libOpenAL32.a"       "${D}/openal/include")
-    target_link_libraries(openal_static INTERFACE winmm ole32 uuid)
+    # OpenAL: the kfx-deps prebuilt tarball is win32-thread-model MinGW, built
+    # against i686-w64-mingw32-g++ (what the Makefile and the CI cross-compile
+    # toolchain use) -- fine there, but MSYS2's native mingw32 gcc used by the
+    # vcpkg-based CMake presets is posix-threads only, so linking against it
+    # fails with "undefined reference to `__gthr_win32_mutex_lock'" etc. Build
+    # it from source via vcpkg (openal-soft in vcpkg.json) instead when vcpkg
+    # is actually in play, so the thread model always matches the compiler
+    # actually in use; otherwise use the prebuilt tarball, matching the
+    # i686-w64-mingw32-g++ toolchain.
+    if(VCPKG_TOOLCHAIN)
+        find_package(OpenAL CONFIG REQUIRED)
+    else()
+        kfx_fetch(openal "${KFX_DEPS_BASE}/2024-11-14/openal-mingw32.tar.gz")
+        kfx_imported(openal_static "${D}/openal/libOpenAL32.a" "${D}/openal/include")
+        target_link_libraries(openal_static INTERFACE winmm ole32 uuid)
+    endif()
     kfx_imported(luajit_static     "${D}/luajit/lib/libluajit.a"     "${D}/luajit/include")
     kfx_imported(miniupnpc_static  "${D}/miniupnpc/libminiupnpc.a"   "${D}/miniupnpc/include")
     target_link_libraries(miniupnpc_static INTERFACE ws2_32 iphlpapi)
@@ -140,9 +169,9 @@ else()
     else()
         message(STATUS "SDL3: system libraries not found; building from source (FetchContent)")
         include(FetchContent)
-        set(SDL3_VER      3.4.12)
+        set(SDL3_VER      3.4.18)
         set(SDL3_MIX_VER  3.2.4)
-        set(SDL3_IMG_VER  3.4.4)
+        set(SDL3_IMG_VER  3.4.6)
         # Shared libs, no tests/examples. Use system decoder libraries rather than
         # vendored ones: the release source tarballs do not bundle the external/
         # decoder submodules, so VENDORED would fail. Distros that hit this path
@@ -188,6 +217,24 @@ else()
     target_include_directories(centitoml INTERFACE "${KFX_CENTITOML_SRC}")
 endif()
 
+# ━━━ Tracy Profiler (optional) — built from source via FetchContent ━━━
+# FetchContent (not vcpkg / a kfx-deps tarball) so Tracy is compiled with the
+# same compiler/CRT as the rest of the project.
+if(KEEPERFX_TRACY)
+    include(FetchContent)
+    set(TRACY_ENABLE ON CACHE BOOL "" FORCE)
+    set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        tracy
+        GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+        GIT_TAG        v0.14.1
+        GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
+    )
+    FetchContent_MakeAvailable(tracy)
+    kfx_status("PROFILER" "Tracy profiler v0.14.1 fetched from source (TRACY_ENABLE + TRACY_ON_DEMAND)")
+endif()
+
 # Link every dependency onto TARGET.
 function(kfx_link_dependencies TARGET)
     if(WIN32)
@@ -195,11 +242,21 @@ function(kfx_link_dependencies TARGET)
         # link them in a group (RESCAN == --start-group/--end-group).
         set(_static
             libavformat_static libavcodec_static libswresample_static libavutil_static
-            openal_static astronomy_static enet6_static miniupnpc_static natpmp_static
+            astronomy_static enet6_static miniupnpc_static natpmp_static
             curl_static spng_static centijson_static minizip_static zlib_static
             luajit_static)
-        target_link_libraries(${TARGET} PRIVATE
-            kfx_sdl3 "$<LINK_GROUP:RESCAN,${_static}>" centitoml)
+        if(NOT VCPKG_TOOLCHAIN)
+            list(APPEND _static openal_static)
+        endif()
+        if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
+            set(_static_link "$<LINK_GROUP:RESCAN,${_static}>")
+        else()
+            set(_static_link ${_static})
+        endif()
+        target_link_libraries(${TARGET} PRIVATE kfx_sdl3 ${_static_link} centitoml)
+        if(VCPKG_TOOLCHAIN)
+            target_link_libraries(${TARGET} PRIVATE OpenAL::OpenAL)
+        endif()
     else()
         target_link_libraries(${TARGET} PRIVATE
             kfx_sdl3
@@ -209,4 +266,5 @@ function(kfx_link_dependencies TARGET)
             centitoml
             miniupnpc natpmp dl)
     endif()
+    target_link_libraries(${TARGET} PRIVATE OpenGL::GL glad)
 endfunction()

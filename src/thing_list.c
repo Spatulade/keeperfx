@@ -54,6 +54,8 @@
 #include "lua_triggers.h"
 #include "keeperfx.hpp"
 #include "bflib_planar.h"
+#include "kfx/profiling/KfxProfilingC.h"
+#include "kfx/ai/TargetSearchProbe.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -397,31 +399,55 @@ long near_thing_pos_thing_filter_is_enemy_object_which_can_be_attacked_by_creatu
  */
 long highest_score_thing_filter_is_enemy_within_distance_which_can_be_attacked_by_creature(const struct Thing *thing, MaxTngFilterParam param, long maximizer)
 {
-    if ((param->class_id == -1) || (thing->class_id == param->class_id))
-    {
-        if (thing_matches_model(thing,param->model_id))
-        {
-            if ((param->plyr_idx == -1) || (thing->owner == param->plyr_idx))
-            {
-                struct Thing* creatng = thing_get(param->primary_number);
-                if (creature_will_attack_creature(creatng, thing) && !creature_has_creature_in_combat(creatng, thing))
-                {
-                    long distance = get_combat_distance(creatng, thing);
-                    if (distance >= param->secondary_number) {
-                        return -1;
-                    }
-                    CrAttackType attack_type = creature_can_have_combat_with_creature(creatng, (struct Thing*)thing, distance, param->tertiary_number, 0);
-                    if (attack_type > AttckT_Unset)
-                    {
-                        long score = get_combat_score(creatng, thing, attack_type, distance);
-                        return score;
-                    }
-                }
-            }
-        }
+    TSP_INC(TSP_Funnel_Entered);
+
+    TSP_ZONE_BEGIN(z_cmo, "TS/Filter: ClassModelOwner");
+    TbBool matches = ((param->class_id == -1) || (thing->class_id == param->class_id))
+        && thing_matches_model(thing, param->model_id)
+        && ((param->plyr_idx == -1) || (thing->owner == param->plyr_idx));
+    TSP_ZONE_END(z_cmo);
+    if (!matches) {
+        TSP_INC(TSP_Rej_ClassModelOwner);
+        return -1;
     }
-    // If conditions are not met, return -1 to be sure thing will not be returned.
-    return -1;
+    struct Thing* creatng = thing_get(param->primary_number);
+
+    TSP_ZONE_BEGIN(z_wa, "TS/Filter: WillAttack");
+    TbBool will_attack = creature_will_attack_creature(creatng, thing);
+    TSP_ZONE_END(z_wa);
+    if (!will_attack) {
+        return -1;
+    }
+
+    TSP_ZONE_BEGIN(z_ic, "TS/Filter: InCombatWith");
+    TbBool in_combat = creature_has_creature_in_combat(creatng, thing);
+    TSP_ZONE_END(z_ic);
+    if (in_combat) {
+        TSP_INC(TSP_Rej_InCombat);
+        return -1;
+    }
+
+    TSP_ZONE_BEGIN(z_dist, "TS/Filter: Distance");
+    long distance = get_combat_distance(creatng, thing);
+    TSP_ZONE_END(z_dist);
+    if (distance >= param->secondary_number) {
+        TSP_INC(TSP_Rej_Distance);
+        return -1;
+    }
+
+    TSP_ZONE_BEGIN(z_reach, "TS/Filter: Reachability");
+    CrAttackType attack_type = creature_can_have_combat_with_creature(creatng, (struct Thing*)thing, distance, param->tertiary_number, 0);
+    TSP_ZONE_END(z_reach);
+    if (attack_type <= AttckT_Unset) {
+        TSP_INC(TSP_Rej_Reachability);
+        return -1;
+    }
+
+    TSP_ZONE_BEGIN(z_score, "TS/Filter: Score");
+    long score = get_combat_score(creatng, thing, attack_type, distance);
+    TSP_ZONE_END(z_score);
+    TSP_INC(TSP_Accepted);
+    return score;
 }
 
 /**
@@ -989,7 +1015,6 @@ TngUpdateRet switch_object_on_destoyed_slab_to_new_owner(struct Thing *thing, Mo
 static void update_thing_animation(struct Thing *thing)
 {
     SYNCDBG(18,"Starting for %s",thing_model_name(thing));
-    int i;
     struct CreatureControl *cctrl;
     if (thing->class_id == TCls_Creature)
     {
@@ -997,28 +1022,7 @@ static void update_thing_animation(struct Thing *thing)
       if (!creature_control_invalid(cctrl))
         cctrl->anim_time = thing->anim_time;
     }
-    if ((thing->anim_speed != 0) && (thing->max_frames != 0))
-    {
-        thing->anim_time += thing->anim_speed;
-        i = (thing->max_frames << 8);
-        if (i <= 0) i = 256;
-        while (thing->anim_time  < 0)
-        {
-          thing->anim_time += i;
-        }
-        if (thing->anim_time > i-1)
-        {
-          if (thing->rendering_flags & TRF_AnimateOnce)
-          {
-            thing->anim_speed = 0;
-            thing->anim_time = i-1;
-          } else
-          {
-            thing->anim_time %= i;
-          }
-        }
-        thing->current_frame = thing->anim_time >> 8;
-    }
+    advance_thing_animation(thing);
     if (thing->transformation_speed != 0)
     {
       thing->sprite_size += thing->transformation_speed;
@@ -1332,24 +1336,48 @@ unsigned long update_creatures_not_in_list(void)
 
 void update_things(void)
 {
+    KFX_C_ZONE_BEGIN(ctx_update_things, "update_things");
     SYNCDBG(7,"Starting");
     optimised_lights = 0;
     total_lights = 0;
     do_lights = game.lish.light_enabled;
+
+    KFX_C_PLOT("Creatures", game.thing_lists[TngList_Creatures].count);
+    TSP_EMIT_TURN();
+
+    KFX_C_ZONE_BEGIN(ctx_creatures, "update_things: Creatures");
     update_things_in_list(&game.thing_lists[TngList_Creatures]);
     update_creatures_not_in_list();
+    KFX_C_ZONE_END(ctx_creatures);
+
+    KFX_C_ZONE_BEGIN(ctx_traps, "update_things: Traps");
     update_things_in_list(&game.thing_lists[TngList_Traps]);
+    KFX_C_ZONE_END(ctx_traps);
+
+    KFX_C_ZONE_BEGIN(ctx_shots, "update_things: Shots");
     update_things_in_list(&game.thing_lists[TngList_Shots]);
+    KFX_C_ZONE_END(ctx_shots);
+
+    KFX_C_ZONE_BEGIN(ctx_objects, "update_things: Objects");
     update_things_in_list(&game.thing_lists[TngList_Objects]);
+    KFX_C_ZONE_END(ctx_objects);
+
+    KFX_C_ZONE_BEGIN(ctx_effects, "update_things: Effects");
     update_things_in_list(&game.thing_lists[TngList_Effects]);
     update_things_in_list(&game.thing_lists[TngList_EffectElems]);
-    update_things_in_list(&game.thing_lists[TngList_DeadCreatrs]);
     update_things_in_list(&game.thing_lists[TngList_EffectGens]);
+    KFX_C_ZONE_END(ctx_effects);
+
+    KFX_C_ZONE_BEGIN(ctx_other, "update_things: Other");
+    update_things_in_list(&game.thing_lists[TngList_DeadCreatrs]);
     update_things_in_list(&game.thing_lists[TngList_Doors]);
     update_things_sounds_in_list(&game.thing_lists[TngList_AmbientSnds]);
     update_cave_in_things();
+    KFX_C_ZONE_END(ctx_other);
+
     game.map_changed_for_navigation = 0;
     SYNCDBG(9,"Finished");
+    KFX_C_ZONE_END(ctx_update_things);
 }
 
 struct Thing *find_players_dungeon_heart(PlayerNumber plyridx)
@@ -1466,8 +1494,8 @@ TbBool script_support_setup_player_as_zombie_keeper(PlayerNumber plyr_idx)
     }
     player->allocflags &= ~PlaF_Allocated; // mark as non-existing
     player->id_number = plyr_idx;
-    player->is_active = 0;
-    player->allocflags &= ~PlaF_CompCtrl;
+    player->allocflags &= ~(PlaF_CompCtrl | PlaF_Placeholder | PlaF_Seat);
+    player->victory_state = VicS_Undecided;
     init_player_start(player, false);
     return true;
 }
@@ -1478,21 +1506,26 @@ void setup_computer_player(int plr_idx)
     struct Thing* thing = find_players_dungeon_heart(plr_idx); // cannot use player->id_number, as it isn't set yet
     if (thing_exists(thing))
     {
-        script_support_setup_player_as_computer_keeper(plr_idx, 0);
+        if (script_support_setup_player_as_computer_keeper(plr_idx, 0))
+            get_player(plr_idx)->allocflags |= PlaF_Seat;
     } else
     {
         script_support_setup_player_as_zombie_keeper(plr_idx);
     }
 }
 
-void setup_computer_players(void)
+void setup_computer_players(PlayerBitFlags zombie_players)
 {
     for (int plr_idx = 0; plr_idx < PLAYERS_COUNT; plr_idx++)
     {
         struct PlayerInfo* player = get_player(plr_idx);
-        if (!player_exists(player))
-        {
-          setup_computer_player(plr_idx);
+        if (player_exists(player)) {
+            continue;
+        }
+        if (flag_is_set(zombie_players, to_flag(plr_idx))) {
+            script_support_setup_player_as_zombie_keeper(plr_idx);
+        } else {
+            setup_computer_player(plr_idx);
         }
     }
 }
@@ -1733,45 +1766,6 @@ struct Thing *find_hero_gate_of_number(long num)
     return INVALID_THING;
 }
 
-/**
- * Returns a creatures lair totem from given subtile.
- */
-struct Thing *find_creature_lair_totem_at_subtile(MapSubtlCoord stl_x, MapSubtlCoord stl_y, ThingModel crmodel)
-{
-    struct Map* mapblk = get_map_block_at(stl_x, stl_y);
-    long i = get_mapwho_thing_index(mapblk);
-    unsigned long k = 0;
-    while (i != 0)
-    {
-        struct Thing* thing = thing_get(i);
-        if (thing_is_invalid(thing))
-        {
-            ERRORLOG("Jump to invalid thing detected");
-            break;
-        }
-        i = thing->next_on_mapblk;
-        // Per-thing code
-        if (thing->class_id == TCls_Object)
-        {
-            struct ObjectConfigStats* objst = get_object_model_stats(thing->model);
-            if (objst->related_creatr_model > 0)
-            {
-                if ((crmodel == 0) || (crmodel == CREATURE_ANY) || (objst->related_creatr_model == crmodel))
-                    return thing;
-            }
-        }
-        // Per-thing code ends
-        k++;
-        if (k > THINGS_COUNT)
-        {
-            ERRORLOG("Infinite loop detected when sweeping things list");
-            break_mapwho_infinite_chain(mapblk);
-            break;
-        }
-    }
-    return INVALID_THING;
-}
-
 struct Thing *find_random_thing_in_room(ThingClass tngclass, ThingModel tngmodel,struct Room *room)
 {
 
@@ -1887,27 +1881,41 @@ long count_things_of_class_with_filter(Thing_Maximizer_Filter filter, MaxTngFilt
  */
 struct Thing *get_nth_thing_of_class_with_filter(Thing_Maximizer_Filter filter, MaxTngFilterParam param, long tngindex)
 {
+    TSP_SCAN_BEGIN(param->class_id);
+    TSP_SCAN_ZONE_BEGIN(ctx_nth_thing);
+    creature_hostility_memo_begin_scan();
     long maximizer = 0;
     long curindex = 0;
     struct Thing* retng = INVALID_THING;
     SYNCDBG(19,"Starting");
     struct StructureList* slist = get_list_for_thing_class(param->class_id);
     if (slist == NULL) {
+        creature_hostility_memo_end_scan();
+        TSP_SCAN_ZONE_END(ctx_nth_thing, 0);
+        TSP_SCAN_END(param->class_id, 0);
         return INVALID_THING;
     }
     long i = slist->index;
     unsigned long k = 0;
     while (i != 0)
     {
+        TSP_ZONE_BEGIN(z_step, "TS/Scan: ListStep");
         struct Thing* thing = thing_get(i);
-        if (thing_is_invalid(thing))
+        TbBool invalid = thing_is_invalid(thing);
+        if (!invalid)
+            i = thing->next_of_class;
+        TSP_ZONE_END(z_step);
+        if (invalid)
         {
             ERRORLOG("Jump to invalid thing detected");
             break;
         }
-        i = thing->next_of_class;
         // Per-thing code
+        TSP_ZONE_BEGIN(z_filter, "TS/Scan: FilterCall");
         long n = filter(thing, param, maximizer);
+        TSP_ZONE_END(z_filter);
+        TSP_ZONE_BEGIN(z_max, "TS/Scan: Maximizer");
+        TbBool stop = false;
         if (n > maximizer)
         {
             retng = thing;
@@ -1921,10 +1929,14 @@ struct Thing *get_nth_thing_of_class_with_filter(Thing_Maximizer_Filter filter, 
             }
             // Only break if we can't get any higher with the filter function result
             if ((maximizer == INT32_MAX) && (curindex >= tngindex)) {
-                break;
+                stop = true;
+            } else {
+                curindex++;
             }
-            curindex++;
         }
+        TSP_ZONE_END(z_max);
+        if (stop)
+            break;
         // Per-thing code ends
         k++;
         if (k > slist->count)
@@ -1933,6 +1945,9 @@ struct Thing *get_nth_thing_of_class_with_filter(Thing_Maximizer_Filter filter, 
             break;
         }
     }
+    creature_hostility_memo_end_scan();
+    TSP_SCAN_ZONE_END(ctx_nth_thing, k);
+    TSP_SCAN_END(param->class_id, k);
     return retng;
 }
 
@@ -2745,6 +2760,29 @@ GoldAmount compute_player_payday_total(const struct Dungeon *dungeon)
             break;
         }
     }
+    i = dungeon->digger_list_start;
+    while (i != 0)
+    {
+        struct Thing* thing = thing_get(i);
+        TRACE_THING(thing);
+        struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
+        if (thing_is_invalid(thing) || creature_control_invalid(cctrl))
+        {
+            ERRORLOG("Jump to invalid creature (%d) detected for %s.", i, player_code_name(dungeon->owner));
+            break;
+        }
+        i = cctrl->players_next_creature_idx;
+        // Thing list loop body
+        total_pay += calculate_correct_creature_pay(thing);
+        // Thing list loop body ends
+        k++;
+        if (k > CREATURES_COUNT)
+        {
+            ERRORLOG("Infinite loop detected when sweeping diggers list");
+            break;
+        }
+    }
+
     SYNCDBG(19,"Finished");
     return total_pay;
 }
@@ -3350,29 +3388,7 @@ TbBool update_thing(struct Thing *thing)
         set_flag(thing->state_flags, TF1_PushAdd);
     }
     if (falling || ((thing->movement_flags & TMvF_Immobile) == 0)) {
-        if ((thing->state_flags & TF1_PushAdd) != 0)
-        {
-            thing->veloc_base.x.val += thing->veloc_push_add.x.val;
-            thing->veloc_base.y.val += thing->veloc_push_add.y.val;
-            thing->veloc_base.z.val += thing->veloc_push_add.z.val;
-            thing->veloc_push_add.x.val = 0;
-            thing->veloc_push_add.y.val = 0;
-            thing->veloc_push_add.z.val = 0;
-            thing->state_flags &= ~TF1_PushAdd;
-        }
-        thing->velocity.x.val = thing->veloc_base.x.val;
-        thing->velocity.y.val = thing->veloc_base.y.val;
-        thing->velocity.z.val = thing->veloc_base.z.val;
-        if ((thing->state_flags & TF1_PushOnce) != 0)
-        {
-          thing->velocity.x.val += thing->veloc_push_once.x.val;
-          thing->velocity.y.val += thing->veloc_push_once.y.val;
-          thing->velocity.z.val += thing->veloc_push_once.z.val;
-          thing->veloc_push_once.x.val = 0;
-          thing->veloc_push_once.y.val = 0;
-          thing->veloc_push_once.z.val = 0;
-          thing->state_flags &= ~TF1_PushOnce;
-        }
+        apply_thing_pushes_to_velocity(thing);
     }
     if (thing->class_id < sizeof(class_functions)/sizeof(class_functions[0]))
         classfunc = class_functions[thing->class_id];
@@ -3402,7 +3418,7 @@ TbBool update_thing(struct Thing *thing)
         thing->veloc_base.y.val = thing->veloc_base.y.val * (256 - thing->inertia_air) / 256;
     }
     else {
-        if ((thing->class_id != TCls_EffectElem) && !flag_is_set(thing->movement_flags, TMvF_Immobile) && (thing->fall_acceleration != 0) && (thing->mappos.z.val <= 0) && !thing_can_traverse_abyss_at(thing, thing->mappos.x.stl.num, thing->mappos.y.stl.num)) {
+        if (thing_starts_falling_into_abyss(thing)) {
             set_flag(thing->state_flags, TF1_FallingIntoAbyss);
             falling = true;
             thing->veloc_base.x.val = thing->velocity.x.val;
@@ -3412,12 +3428,32 @@ TbBool update_thing(struct Thing *thing)
         }
     }
     if (falling && (thing->mappos.z.val <= -subtile_coord(ABYSS_DEPTH, 0))) {
-        if (thing_is_creature(thing)) {
+        if (thing_is_creature(thing))
+        {
             lua_on_creature_fell_into_abyss(thing);
             if (!flag_is_set(thing->state_flags, TF1_FallingIntoAbyss)) {
                 return true;
             }
-            kill_creature(thing, INVALID_THING, -1, CrDed_Default);
+            PlayerNumber killer = -1;
+            CrDeathFlags flags = CrDed_Default;
+            if ((get_gameturn() - thing->last_turn_pushed) < 15)
+            {
+                flags = CrDed_DiedInBattle;
+                killer = thing->pushed_by_player;
+                if (is_my_player_number(thing->owner))
+                {
+                    output_message_far_from_thing(thing, SMsg_BattleDeath, MESSAGE_DURATION_BATTLE);
+                }
+            }
+            else if (flag_is_set(thing->movement_flags, TMvF_Grounded))
+            {
+                flags = CrDed_DiedInBattle;
+                if (is_my_player_number(thing->owner))
+                {
+                    output_message_far_from_thing(thing, SMsg_BattleDeath, MESSAGE_DURATION_BATTLE);
+                }
+            }
+            kill_creature(thing, INVALID_THING, killer, flags);
         } else {
             destroy_thing(thing);
         }
@@ -3425,42 +3461,7 @@ TbBool update_thing(struct Thing *thing)
     }
     SYNCDBG(18,"Class function end ok");
     if (!falling && ((thing->movement_flags & TMvF_Immobile) == 0)) {
-        if ((thing->mappos.z.val > thing->floor_height) || !thing_can_traverse_abyss_at(thing, thing->mappos.x.stl.num, thing->mappos.y.stl.num)) {
-            if (thing->veloc_base.x.val != 0)
-                thing->veloc_base.x.val = thing->veloc_base.x.val * (256 - thing->inertia_air) / 256;
-            if (thing->veloc_base.y.val != 0)
-                thing->veloc_base.y.val = thing->veloc_base.y.val * (256 - thing->inertia_air) / 256;
-            if ((thing->movement_flags & TMvF_Flying) == 0) {
-                thing->veloc_push_add.z.val -= thing->fall_acceleration;
-                thing->state_flags |= TF1_PushAdd;
-            } else
-            {
-                // For flying creatures, the Z velocity should also decrease over time
-                if (thing->veloc_base.z.val != 0)
-                {
-                    thing->veloc_base.z.val = thing->veloc_base.z.val * (256 - thing->inertia_air) / 256;
-                }
-                else
-                {
-                    if (thing_above_flight_altitude(thing) && ((thing->alloc_flags & TAlF_IsControlled) == 0))
-                    {
-                        thing->veloc_push_add.z.val -= thing->fall_acceleration;
-                        thing->state_flags |= TF1_PushAdd;
-                    }
-                }
-            }
-        } else
-        {
-            if (thing->veloc_base.x.val != 0)
-              thing->veloc_base.x.val = thing->veloc_base.x.val * (256 - thing->inertia_floor) / 256;
-            if (thing->veloc_base.y.val != 0)
-              thing->veloc_base.y.val = thing->veloc_base.y.val * (256 - thing->inertia_floor) / 256;
-            thing->mappos.z.val = thing->floor_height;
-            if ((thing->movement_flags & TMvF_ZeroVerticalVelocity) != 0)
-            {
-              thing->veloc_base.z.val = 0;
-            }
-        }
+        apply_thing_drag_and_gravity(thing);
     }
     update_thing_animation(thing);
     update_thing_sound(thing);
@@ -3624,7 +3625,7 @@ TbBool thing_is_shootable(const struct Thing *thing, PlayerNumber shot_owner, Hi
             return ((hit_targets & HitTF_AlliedSoulContainer) != 0);
         }
         if (object_is_growing_food(thing) ||
-           (object_is_mature_food(thing) && !is_thing_directly_controlled(thing) && !is_thing_passenger_controlled(thing)))
+           (object_is_mature_food(thing) && !user_controls_thing(ANY_USER, thing, UCT_Direct | UCT_PossessionEntryZoom) && !user_controls_thing(ANY_USER, thing, UCT_Passenger | UCT_PossessionEntryZoom)))
         {
             return ((hit_targets & HitTF_AnyFoodObjects) != 0);
         }
@@ -4267,7 +4268,7 @@ long switch_owned_objects_on_destoyed_slab_to_neutral(MapSlabCoord slb_x, MapSla
 
 TbBool setup_creature_leave_or_die_if_possible(struct Thing *thing)
 {
-    if (!is_thing_some_way_controlled(thing) && !creature_is_dying(thing))
+    if (!user_controls_thing(ANY_USER, thing, UCT_Selected) && !creature_is_dying(thing))
     {
         if (!creature_is_kept_in_custody_by_enemy(thing) && !creature_is_being_unconscious(thing) && !creature_is_leaving_and_cannot_be_stopped(thing))
         {
@@ -4354,7 +4355,7 @@ unsigned short setup_excess_creatures_to_leave_or_die(short max_remain)
             cleanup_creature_state_and_interactions(thing);
             force_any_creature_dragging_thing_to_drop_it(thing);
 
-            if (is_thing_some_way_controlled(thing) || thing_is_picked_up(thing))
+            if (user_controls_thing(ANY_USER, thing, UCT_Selected) || thing_is_picked_up(thing))
             {
                 kill_creature(thing, INVALID_THING, -1, CrDed_Default);
             }
@@ -4456,7 +4457,7 @@ void break_mapwho_infinite_chain(const struct Map *mapblk)
     WARNLOG("No change performed");
 }
 
-ThingIndex get_index_of_next_creature_of_owner_and_model(struct Thing *current_creature, PlayerNumber owner, ThingModel crmodel, struct PlayerInfo *player)
+ThingIndex get_index_of_next_creature_of_owner_and_model(struct Thing *current_creature, PlayerNumber owner, ThingModel crmodel, NetUserId user)
 {
     unsigned long k = 0;
     ThingIndex i = current_creature->index;
@@ -4478,7 +4479,7 @@ ThingIndex get_index_of_next_creature_of_owner_and_model(struct Thing *current_c
             {
                 if ( (thing->model == crmodel) || (crmodel == 0) )
                 {
-                    if (creature_can_be_queried(player, thing))
+                    if (creature_can_be_queried(user, thing))
                     {
                         return thing->index;
                     }

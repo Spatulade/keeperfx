@@ -35,7 +35,7 @@ WINDRES  = $(CROSS_COMPILE)windres
 DOXYTOOL = doxygen
 BUILD_NUMBER ?= $(VER_BUILD)
 PACKAGE_SUFFIX ?= Prototype
-$(if $(WSL_DISTRO_NAME),$(shell wsl.exe -d "$(WSL_DISTRO_NAME)" -u root -- bash -c 'date -s "$$(powershell.exe -NoProfile -Command Get-Date -Format o)" > /dev/null'))
+$(if $(WSL_DISTRO_NAME),$(shell git ls-files -z | xargs -0r -n 128 sh -c 'find -- "$$@" -maxdepth 0 -type f -newermt now -exec touch {} +' sh 2> /dev/null))
 BUILD_START := $(shell date +%s.%N)
 PNGTOICO = tools/png2ico/png2ico$(CROSS_EXEEXT)
 PNGTORAW = tools/pngpal2raw/bin/pngpal2raw$(CROSS_EXEEXT)
@@ -68,6 +68,7 @@ GENSRC   = src/ver_defs.h
 RES      = $(OBJDIR)/keeperfx_stdres.res
 DEPS := \
 	obj/centitoml/toml_api.o \
+	obj/glad/glad.o \
 	deps/luajit/lib/libluajit.a
 FTEST_DEBUG ?= 0
 FTEST_DBGFLAGS := $(if $(filter 1,$(FTEST_DEBUG)),-DFUNCTESTING=1,)
@@ -82,12 +83,14 @@ C_SRCS := $(wildcard \
 	src/*.c \
 	src/kfx/*.c \
 	src/kfx/*/*.c \
-	src/kfx/*/*/*.c)
+	src/kfx/*/*/*.c \
+	src/kfx/*/*/*/*.c)
 CXX_SRCS := $(filter-out src/kfx/platform/PlatformLinux.cpp src/main.cpp,$(wildcard \
 	src/*.cpp \
 	src/kfx/*.cpp \
 	src/kfx/*/*.cpp \
-	src/kfx/*/*/*.cpp))
+	src/kfx/*/*/*.cpp \
+	src/kfx/*/*/*/*.cpp))
 OBJS_CORE := \
 	$(patsubst src/%.c,obj/%.o,$(C_SRCS)) \
 	$(patsubst src/%.cpp,obj/%.o,$(CXX_SRCS))
@@ -123,6 +126,10 @@ LINKLIB = -mwindows \
 	-L"deps/centijson" -ljson \
 	-L"deps/zlib" -lminizip -lz \
 	-lwinmm -lmingw32 -limagehlp -lws2_32 -ldbghelp -lbcrypt -lole32 -luuid
+# OpenGL renderer backend -- always built.
+LINKLIB += -lopengl32
+# DXGI display diagnostics (WindowCompositorWin.cpp).
+LINKLIB += -ldxgi
 INCS = \
 	-I"src" \
 	-isystem"deps/zlib/include" \
@@ -137,13 +144,14 @@ INCS = \
 	-isystem"deps/luajit/include" \
 	-isystem"deps/miniupnpc/include" \
 	-isystem"deps/libnatpmp/include" \
-	-isystem"deps/libcurl/include"
+	-isystem"deps/libcurl/include" \
+	-isystem"deps/glad/include"
 STDOBJS   := $(subst obj/,$(OBJDIR)/std/,$(OBJS))
 HVLOGOBJS := $(subst obj/,$(OBJDIR)/hvlog/,$(OBJS))
 STD_MAIN_OBJ := $(subst obj/,$(OBJDIR)/std/,$(MAIN_OBJ))
 HVLOG_MAIN_OBJ := $(subst obj/,$(OBJDIR)/hvlog/,$(MAIN_OBJ))
-NO_PCH_C = bflib_dernc bflib_text net_holepunch net_lan net_matchmaking centitoml/toml_api
-NO_PCH_CXX = net_portforward kfx/platform/WindowSystemSDL
+NO_PCH_C = bflib_dernc bflib_text logging net_holepunch net_lan net_matchmaking centitoml/toml_api
+NO_PCH_CXX = net_portforward kfx/platform/WindowSystemSDL kfx/platform/WindowCompositorWin
 STD_CXX_O = \
 	$(patsubst src/%.cpp,$(OBJDIR)/std/%.o,$(CXX_SRCS)) \
 	$(STD_MAIN_OBJ)
@@ -295,6 +303,8 @@ $(eval $(call LINK_RULE,$(HVLOGBIN),$(HVLOGBIN:%.exe=%.map),$(HVLOGOBJS) $(HVLOG
 $(eval $(call LINK_RULE,$(TEST_BIN),$(TEST_BIN:%.exe=%.map),$(TESTS_OBJ) $(STDOBJS) $(CU_OBJS) $(RES),tests.exe,tests.map))
 $(OBJDIR)/std/centitoml/toml_api.o $(OBJDIR)/hvlog/centitoml/toml_api.o: deps/centitoml/toml_api.c
 	$(CC) $(CFLAGS) -o"$@" "$<"
+$(OBJDIR)/std/glad/glad.o $(OBJDIR)/hvlog/glad/glad.o: deps/glad/src/glad.c
+	$(CC) $(CFLAGS) -o"$@" "$<"
 $(OBJDIR)/tests/%.o: src/tests/%.cpp | $(GENSRC)
 	$(CPP) $(CXXFLAGS) -I"src/" $(CU_INC) -o"$@" "$<"
 $(OBJDIR)/cu/%.o: $(CU_DIR)/Sources/Framework/%.c
@@ -362,6 +372,7 @@ src/bflib_fmvids.cpp: deps/ffmpeg/libavformat/avformat.h
 src/bflib_sndlib.cpp: deps/openal/include/AL/al.h
 src/net_exchange_gameplay.c: deps/zlib/include/zlib.h
 src/net_resync.cpp: deps/zlib/include/zlib.h
+src/replay_rewind.c: deps/zlib/include/zlib.h
 src/console_cmd.c: deps/luajit/include/lua.h
 src/net_portforward.cpp: deps/miniupnpc/include/miniupnpc/miniupnpc.h deps/libnatpmp/include/natpmp/natpmp.h
 src/net_matchmaking.c: deps/libcurl/include/curl/curl.h
@@ -448,12 +459,7 @@ include tool_sndbanker.mk
 include tool_rnctools.mk
 PKG_GOALS = \
 	package \
-	pkg-assemble \
-	pkg-gfx \
-	pkg-landviews \
-	pkg-menugfx \
-	pkg-enginegfx \
-	pkg-sfx \
+	pkg-% \
 	convert-sfx \
 	clean \
 	deep-clean \

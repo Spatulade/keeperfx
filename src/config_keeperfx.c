@@ -25,6 +25,7 @@
 #include "bflib_dernc.h"
 #include "bflib_enet.h"
 #include "bflib_video.h"
+#include "kfx/renderer/RendererManager.h" // RENDERER_SOFTWARE/RENDERER_OPENGL
 #include "bflib_keybrd.h"
 #include "bflib_datetm.h"
 #include "bflib_mouse.h"
@@ -37,6 +38,7 @@
 #include "front_simple.h"
 #include "front_input.h"
 #include "gui_draw.h"
+#include "gui_msgs.h"
 #include "scrcapt.h"
 #include "sounds.h"
 #include "vidmode.h"
@@ -62,7 +64,13 @@ struct InstallInfo install_info;
 char keeper_runtime_directory[152];
 short api_enabled = false;
 uint16_t api_port = 5599;
+uint32_t packetsave_max_kb = 32768;
+TbBool replays_enabled = true;
+uint32_t max_replays[ReplTyp_Count] = {5, 5, 10};
+uint32_t replay_rewind_buffer_kb = 65536;
 unsigned long features_enabled = 0;
+static unsigned char parchment_map_fade_turns = 0;
+unsigned char viewport_mode = VpMode_Original;
 TbBool exit_on_lua_error = false;
 TbBool FLEE_BUTTON_DEFAULT = false;
 TbBool IMPRISON_BUTTON_DEFAULT = false;
@@ -168,7 +176,28 @@ const struct NamedCommand conf_commands[] = {
   {"CAPTURE_CURSOR"                , 46},
   {"MATCHMAKING_SERVER"            , 47},
   {"MULTIPLAYER_PORT"              , 48},
+  {"RENDERER"                      , 49},
+  {"VIEWPORT_MODE"                 , 50},
+  {"PARCHMENT_MAP_FADE"            , 51},
+  {"AUTOMATIC_REPLAYS"             , 52},
+  {"MAX_REPLAYS"                   , 53},
+  {"REPLAY_MAX_SIZE"               , 54},
+  {"CHAT_FONT_SIZE"                , 55},
+  {"REPLAY_REWIND_BUFFER_SIZE"     , 56},
   {NULL,                   0},
+  };
+
+  const struct NamedCommand viewport_mode_desc[] = {
+  {"ORIGINAL",       VpMode_Original},
+  {"FULL",           VpMode_Full},
+  {"FULL_LETTERBOX", VpMode_FullLetterbox},
+  {NULL,             0},
+  };
+
+  const struct NamedCommand renderer_type_desc[] = {
+  {"SOFTWARE",     RENDERER_SOFTWARE},
+  {"OPENGL",       RENDERER_OPENGL},
+  {NULL,           0},
   };
 
   const struct NamedCommand vidscale_type[] = {
@@ -232,7 +261,7 @@ unsigned int vid_scale_flags = SMK_FullscreenFit;
  * Returns if the censorship is on. This mostly affects blood.
  * Originally, censorship was on for german language.
  */
-TbBool censorship_enabled(void)
+TbBool local_censorship_enabled(void)
 {
   return ((features_enabled & Ft_Censorship) != 0);
 }
@@ -290,6 +319,11 @@ TbBool use_relative_mouse_mode(void)
   return ((features_enabled & Ft_RelativeMouseMode) != 0);
 }
 
+/** This machine's map fade length in turns, from keeperfx.cfg; 0 means no fade. */
+unsigned char get_parchment_map_fade_turns(void)
+{
+    return parchment_map_fade_turns;
+}
 /**
  * Returns if we should pause the music, if the user pauses the game.
  */
@@ -369,29 +403,8 @@ TbBool prepare_diskpath(char *buf,long buflen)
     return true;
 }
 
-static void load_file_configuration(const char *fname, const char *sname, const char *config_textname, unsigned short flags)
+static void load_string_configuration(const char *buf, int32_t len, const char *config_textname)
 {
-  long len = LbFileLengthRnc(fname);
-  if (len < 2)
-  {
-    if ((flags & CnfLd_IgnoreErrors) == 0)
-      WARNMSG("%s file \"%s\" doesn't exist or is too small.", config_textname,sname);
-    return;
-  }
-  if (len > 65536)
-  {
-    WARNMSG("%s file \"%s\" is too large.",config_textname,sname);
-    return;
-  }
-  char* buf = (char*)KfxCalloc(len + 256, 1);
-  if (buf == NULL)
-    return;
-  // Loading file data
-  len = LbFileLoadAt(fname, buf);
-  if (len>0)
-  {
-    SYNCDBG(7,"Processing %s file, %ld bytes",config_textname,len);
-    buf[len] = '\0';
     // Set text line number - we don't have blocks so we need to initialize it manually
     text_line_number = 1;
     int32_t pos = 0;
@@ -425,9 +438,6 @@ static void load_file_configuration(const char *fname, const char *sname, const 
               install_info.inst_path[sizeof(install_info.inst_path)-1] = '\0';
           }
           break;
-      case 2: // INSTALL_TYPE
-          // This command is just skipped...
-          break;
       case 3: // LANGUAGE
           i = recognize_conf_parameter(buf,&pos,len,lang_type);
           if (i <= 0)
@@ -437,9 +447,6 @@ static void load_file_configuration(const char *fname, const char *sname, const 
             break;
           }
           install_info.lang_id = i;
-          break;
-      case 4: // KEYBOARD
-          // Works only in DK Premium
           break;
       case 5: // SCREENSHOT
           i = recognize_conf_parameter(buf,&pos,len,scrshot_type);
@@ -732,9 +739,6 @@ static void load_file_configuration(const char *fname, const char *sname, const 
               }
           }
           break;
-        case 23: //SKIP_HEART_ZOOM
-          CONFLOG("The \"%s\" setting is unused. Use the -skipheartzoom command line option instead.", COMMAND_TEXT(cmd_num));
-          break;
         case 24: //CURSOR_EDGE_CAMERA_PANNING
           i = recognize_conf_parameter(buf,&pos,len,logicval_type);
           if (i <= 0)
@@ -829,12 +833,6 @@ static void load_file_configuration(const char *fname, const char *sname, const 
               line_box_size = i;
           } else {
               CONFWRNLOG("Couldn't recognize \"%s\" command parameter in %s file.",COMMAND_TEXT(cmd_num),config_textname);
-          }
-          break;
-      case 32: // COMMAND_CHAR
-          if (get_conf_parameter_single(buf,&pos,len,word_buf,sizeof(word_buf)) > 0)
-          {
-              cmd_char = word_buf[0];
           }
           break;
       case 33: // API_ENABLED
@@ -1048,9 +1046,126 @@ static void load_file_configuration(const char *fname, const char *sname, const 
             CONFWRNLOG("Invalid MULTIPLAYER_PORT '%s' in %s file.", COMMAND_TEXT(cmd_num), config_textname);
           }
           break;
+      case 49: // RENDERER
+          i = recognize_conf_parameter(buf,&pos,len,renderer_type_desc);
+          if (i <= 0)
+          {
+              CONFWRNLOG("Couldn't recognize \"%s\" command parameter in %s file.",
+                COMMAND_TEXT(cmd_num),config_textname);
+            break;
+          }
+          requested_renderer_type = i;
+          break;
+      case 50: // VIEWPORT_MODE
+          i = recognize_conf_parameter(buf,&pos,len,viewport_mode_desc);
+          if (i <= 0)
+          {
+              CONFWRNLOG("Couldn't recognize \"%s\" command parameter in %s file.",
+                COMMAND_TEXT(cmd_num),config_textname);
+            break;
+          }
+          viewport_mode = i;
+          break;
+      case 51: // PARCHMENT_MAP_FADE
+          i = recognize_conf_parameter(buf, &pos, len, logicval_type);
+          if (i == 1)
+          {
+              parchment_map_fade_turns = PARCHMENT_MAP_FADE_FAST_TURNS;
+              break;
+          }
+          else if (i == 2)
+          {
+              parchment_map_fade_turns = 0;
+              break;
+          }
+          else
+          {
+              if (get_conf_parameter_single(buf, &pos, len, word_buf, sizeof(word_buf)) <= 0)
+              {
+                  CONFWRNLOG("Couldn't recognize \"%s\" command parameter in %s file.",
+                      COMMAND_TEXT(cmd_num), config_textname);
+                  break;
+              }
+              if (strcasecmp(word_buf, "ORIGINAL") == 0)
+                  parchment_map_fade_turns = PARCHMENT_MAP_FADE_ORIGINAL_TURNS;
+              else
+                  CONFWRNLOG("Incorrect value of \"%s\" parameter in %s file; expected OFF or ON.",
+                      COMMAND_TEXT(cmd_num), config_textname);
+          }
+          break;
+      case 52: // AUTOMATIC_REPLAYS
+          i = recognize_conf_parameter(buf, &pos, len, logicval_type);
+          if (i <= 0)
+          {
+              CONFWRNLOG("Couldn't recognize \"%s\" command parameter in %s file.",
+                  COMMAND_TEXT(cmd_num), config_textname);
+              break;
+          }
+          replays_enabled = (i == 1);
+          break;
+      case 53: // MAX_REPLAYS
+          i = 0;
+          for (int typ = 0; typ < ReplTyp_Count; typ++)
+          {
+              if (get_conf_parameter_single(buf,&pos,len,word_buf,sizeof(word_buf)) > 0)
+              {
+                  i = atoi(word_buf);
+                  if (i < 0) {
+                      CONFWRNLOG("Invalid \"%s\" value in %s file.",COMMAND_TEXT(cmd_num),config_textname);
+                      i = 0;
+                  }
+              }
+              max_replays[typ] = i;
+          }
+          break;
+      case 54: // REPLAY_MAX_SIZE
+          i = -1;
+          if (get_conf_parameter_single(buf, &pos, len, word_buf, sizeof(word_buf)) > 0)
+          {
+              i = atoi(word_buf);
+          }
+          if (i >= 0) {
+              packetsave_max_kb = i;
+          }
+          else {
+              CONFWRNLOG("Invalid \"%s\" value in %s file.", COMMAND_TEXT(cmd_num), config_textname);
+          }
+          break;
+      case 55: // CHAT_FONT_SIZE
+          i = -1;
+          if (get_conf_parameter_single(buf, &pos, len, word_buf, sizeof(word_buf)) > 0)
+          {
+              i = atoi(word_buf);
+          }
+          if (i > 0) {
+              chat_font_size = i;
+          }
+          else {
+              CONFWRNLOG("Invalid \"%s\" value in %s file.", COMMAND_TEXT(cmd_num), config_textname);
+          }
+          break;
+      case 56: // REPLAY_REWIND_BUFFER_SIZE
+          i = -1;
+          if (get_conf_parameter_single(buf, &pos, len, word_buf, sizeof(word_buf)) > 0)
+          {
+              i = atoi(word_buf);
+          }
+          if (i >= 0) {
+              replay_rewind_buffer_kb = i;
+          }
+          else {
+              CONFWRNLOG("Invalid \"%s\" value in %s file.", COMMAND_TEXT(cmd_num), config_textname);
+          }
+          break;
       case ccr_comment:
           break;
       case ccr_endOfFile:
+          break;
+      case 2: // INSTALL_TYPE
+      case 4: // KEYBOARD
+      case 23: //SKIP_HEART_ZOOM
+      case 32: // COMMAND_CHAR
+          CONFLOG("The \"%s\" setting is depricated.", COMMAND_TEXT(cmd_num));
           break;
       default:
           CONFWRNLOG("Unrecognized command in %s file.",config_textname);
@@ -1059,6 +1174,32 @@ static void load_file_configuration(const char *fname, const char *sname, const 
       skip_conf_to_next_line(buf,&pos,len);
     }
 #undef COMMAND_TEXT
+}
+
+static void load_file_configuration(const char *fname, const char *sname, const char *config_textname, unsigned short flags)
+{
+  long len = LbFileLengthRnc(fname);
+  if (len < 2)
+  {
+    if ((flags & CnfLd_IgnoreErrors) == 0)
+      WARNMSG("%s file \"%s\" doesn't exist or is too small.", config_textname,sname);
+    return;
+  }
+  if (len > 65536)
+  {
+    WARNMSG("%s file \"%s\" is too large.", config_textname,sname);
+    return;
+  }
+  char* buf = (char*)KfxCalloc(len + 256, 1);
+  if (buf == NULL)
+    return;
+
+  len = LbFileLoadAt(fname, buf);
+  if (len>0)
+  {
+    SYNCDBG(7,"Processing %s file, %ld bytes", config_textname, len);
+    buf[len] = '\0';
+    load_string_configuration(buf, len, config_textname);
   }
   SYNCDBG(7,"%s loaded", config_textname);
   // Freeing
@@ -1156,6 +1297,9 @@ short load_configuration(void)
   load_file_configuration(fname, sname, config_textname, 0);
 
   load_configuration_for_mod_all();
+
+  if (start_params.config_overrides != NULL)
+    load_string_configuration(start_params.config_overrides, strlen(start_params.config_overrides), "CLI (-cfg)");
 
   // Returning if the setting are valid
   return (install_info.lang_id > 0) && (install_info.inst_path[0] != '\0');

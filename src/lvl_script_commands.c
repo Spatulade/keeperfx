@@ -597,6 +597,24 @@ TbBool parse_get_varib(const char *varib_name, int32_t *varib_id, int32_t *varib
             }
             *varib_type = SVar_DESTROYED_KEEPER;
         }
+        else if (2 == sscanf(varib_name, "BATTLES_WON[%n%[^]]%c", &len, arg, &c) && (c == ']'))
+        {
+            *varib_id = get_id(player_desc, arg);
+            if (*varib_id == -1)
+            {
+                *varib_id = get_id(cmpgn_human_player_options, arg);
+            }
+            *varib_type = SVar_BATTLES_WON_VS;
+        }
+        else if (2 == sscanf(varib_name, "BATTLES_LOST[%n%[^]]%c", &len, arg, &c) && (c == ']'))
+        {
+            *varib_id = get_id(player_desc, arg);
+            if (*varib_id == -1)
+            {
+                *varib_id = get_id(cmpgn_human_player_options, arg);
+            }
+            *varib_type = SVar_BATTLES_LOST_VS;
+        }
         else if (2 == sscanf(varib_name, "SACRIFICED[%n%[^]]%c", &len, arg, &c) && (c == ']'))
         {
             *varib_id = get_id(creature_desc, arg);
@@ -832,13 +850,13 @@ static void display_objective_check(const struct ScriptLine *scline)
     }
     value->shorts[0] = msg_num;
     value->ulongs[1] = location;
-    value->shorts[3] = x;
-    value->shorts[4] = y;
-    value->shorts[5] = -1;
+    value->shorts[4] = x;
+    value->shorts[5] = y;
+    value->shorts[6] = -1;
 
     const char *icon = (scline->command == Cmd_DISPLAY_OBJECTIVE)
         ? scline->tp[2] : scline->tp[3];
-    if (icon[0] != '\0' && !get_custom_icon_from_value(icon, &value->shorts[5]))
+    if (icon[0] != '\0' && !get_custom_icon_from_value(icon, &value->shorts[6]))
     {
         SCRPTERRLOG("Invalid custom icon (%s)", icon);
         DEALLOCATE_SCRIPT_VALUE
@@ -853,9 +871,9 @@ static void display_objective_process(struct ScriptContext *context)
     set_general_objective_with_icon(context->value->shorts[0],
         context->player_idx,
         context->value->ulongs[1],
-        context->value->shorts[3],
         context->value->shorts[4],
-        context->value->shorts[5]);
+        context->value->shorts[5],
+        context->value->shorts[6]);
 }
 
 static void display_player_objective_check(const struct ScriptLine* scline)
@@ -886,13 +904,13 @@ static void display_player_objective_check(const struct ScriptLine* scline)
     }
     value->shorts[0] = msg_num;
     value->ulongs[1] = location;
-    value->shorts[3] = x;
-    value->shorts[4] = y;
-    value->shorts[5] = -1;
+    value->shorts[4] = x;
+    value->shorts[5] = y;
+    value->shorts[6] = -1;
 
     const char *icon = (scline->command == Cmd_DISPLAY_PLAYER_OBJECTIVE)
         ? scline->tp[3] : scline->tp[4];
-    if (icon[0] != '\0' && !get_custom_icon_from_value(icon, &value->shorts[5]))
+    if (icon[0] != '\0' && !get_custom_icon_from_value(icon, &value->shorts[6]))
     {
         SCRPTERRLOG("Invalid custom icon (%s)", icon);
         DEALLOCATE_SCRIPT_VALUE
@@ -948,13 +966,13 @@ static void quick_objective_check(const struct ScriptLine* scline)
 
     value->shorts[0] = idx;
     value->ulongs[1] = location;
-    value->shorts[3] = x;
-    value->shorts[4] = y;
-    value->shorts[5] = -1;
+    value->shorts[4] = x;
+    value->shorts[5] = y;
+    value->shorts[6] = -1;
 
     const char *icon = (scline->command == Cmd_QUICK_OBJECTIVE)
         ? scline->tp[3] : scline->tp[4];
-    if (icon[0] != '\0' && !get_custom_icon_from_value(icon, &value->shorts[5]))
+    if (icon[0] != '\0' && !get_custom_icon_from_value(icon, &value->shorts[6]))
     {
         SCRPTERRLOG("Invalid custom icon (%s)", icon);
         DEALLOCATE_SCRIPT_VALUE
@@ -970,9 +988,9 @@ static void quick_objective_process(struct ScriptContext* context)
         game.quick_messages[context->value->shorts[0] % QUICK_MESSAGES_COUNT],
         context->player_idx,
         context->value->ulongs[1],
-        context->value->shorts[3],
         context->value->shorts[4],
-        context->value->shorts[5]);
+        context->value->shorts[5],
+        context->value->shorts[6]);
 }
 
 static void quick_player_objective_check(const struct ScriptLine* scline)
@@ -1021,13 +1039,13 @@ static void quick_player_objective_check(const struct ScriptLine* scline)
 
     value->shorts[0] = idx;
     value->ulongs[1] = location;
-    value->shorts[3] = x;
-    value->shorts[4] = y;
-    value->shorts[5] = -1;
+    value->shorts[4] = x;
+    value->shorts[5] = y;
+    value->shorts[6] = -1;
 
     const char *icon = (scline->command == Cmd_QUICK_PLAYER_OBJECTIVE)
         ? scline->tp[4] : scline->tp[5];
-    if (icon[0] != '\0' && !get_custom_icon_from_value(icon, &value->shorts[5]))
+    if (icon[0] != '\0' && !get_custom_icon_from_value(icon, &value->shorts[6]))
     {
         SCRPTERRLOG("Invalid custom icon (%s)", icon);
         DEALLOCATE_SCRIPT_VALUE
@@ -1106,12 +1124,12 @@ static void quick_information_check(const struct ScriptLine* scline)
 
     value->shorts[0] = idx;
     value->ulongs[1] = location;
-    value->shorts[3] = x;
-    value->shorts[4] = y;
-    value->shorts[5] = -1;
+    value->shorts[4] = x;
+    value->shorts[5] = y;
+    value->shorts[6] = -1;
     if (scline->command == Cmd_QUICK_INFORMATION)
     {
-        if (scline->tp[3][0] != '\0' && !get_custom_icon_from_value(scline->tp[3], &value->shorts[5]))
+        if (scline->tp[3][0] != '\0' && !get_custom_icon_from_value(scline->tp[3], &value->shorts[6]))
         {
             SCRPTERRLOG("Invalid custom icon (%s)", scline->tp[3]);
             DEALLOCATE_SCRIPT_VALUE
@@ -1123,7 +1141,7 @@ static void quick_information_check(const struct ScriptLine* scline)
 
 static void quick_information_process(struct ScriptContext* context)
 {
-    set_quick_information_with_icon(context->value->shorts[0], context->player_idx, context->value->ulongs[1], context->value->shorts[3], context->value->shorts[4], context->value->shorts[5]);
+    set_quick_information_with_icon(context->value->shorts[0], context->player_idx, context->value->ulongs[1], context->value->shorts[4], context->value->shorts[5], context->value->shorts[6]);
 }
 
 static void quick_player_information_check(const struct ScriptLine* scline)
@@ -1172,8 +1190,9 @@ static void quick_player_information_check(const struct ScriptLine* scline)
 
     value->shorts[0] = idx;
     value->ulongs[1] = location;
-    value->shorts[3] = x;
-    value->shorts[4] = y;
+    value->shorts[4] = x;
+    value->shorts[5] = y;
+    value->shorts[6] = -1;
     PROCESS_SCRIPT_VALUE(scline->command);
 }
 
@@ -1214,10 +1233,10 @@ static void display_information_check(const struct ScriptLine* scline)
 
     value->shorts[0] = msg_num;
     value->ulongs[1] = location;
-    value->shorts[3] = x;
-    value->shorts[4] = y;
-    value->shorts[5] = -1;
-    if (scline->tp[2][0] != '\0' && !get_custom_icon_from_value(scline->tp[2], &value->shorts[5]))
+    value->shorts[4] = x;
+    value->shorts[5] = y;
+    value->shorts[6] = -1;
+    if (scline->tp[2][0] != '\0' && !get_custom_icon_from_value(scline->tp[2], &value->shorts[6]))
     {
         SCRPTERRLOG("Invalid custom icon (%s)", scline->tp[2]);
         DEALLOCATE_SCRIPT_VALUE
@@ -1229,7 +1248,7 @@ static void display_information_check(const struct ScriptLine* scline)
 static void display_information_process(struct ScriptContext* context)
 {
     set_general_information_with_icon(context->value->shorts[0], context->player_idx,
-        context->value->ulongs[1], context->value->shorts[3], context->value->shorts[4], context->value->shorts[5]);
+        context->value->ulongs[1], context->value->shorts[4], context->value->shorts[5], context->value->shorts[6]);
 }
 
 static void display_player_information_check(const struct ScriptLine* scline)
@@ -1269,9 +1288,9 @@ static void display_player_information_check(const struct ScriptLine* scline)
 
     value->shorts[0] = msg_num;
     value->ulongs[1] = location;
-    value->shorts[3] = x;
-    value->shorts[4] = y;
-    value->shorts[5] = -1;
+    value->shorts[4] = x;
+    value->shorts[5] = y;
+    value->shorts[6] = -1;
     PROCESS_SCRIPT_VALUE(scline->command);
 }
 
@@ -1538,17 +1557,71 @@ static int script_transfer_creature(PlayerNumber plyr_idx, ThingModel crmodel, l
 
 static void special_transfer_creature_process(struct ScriptContext* context)
 {
-    if (my_player_number == context->player_idx)
-    {
-        struct Thing *heartng = get_player_soul_container(context->player_idx);
-        struct PlayerInfo* player = get_my_player();
-        start_transfer_creature(player, heartng);
-    }
+    struct Thing* heartng = get_player_soul_container(context->player_idx);
+    struct PlayerInfo* player = get_player(context->player_idx);
+    start_transfer_creature(player, heartng);
 }
 
 static void special_transfer_creature_check(const struct ScriptLine* scline)
 {
-    command_add_value(Cmd_USE_SPECIAL_TRANSFER_CREATURE, scline->np[0],0,0,0);
+    ALLOCATE_SCRIPT_VALUE(scline->command, scline->np[0]);
+    PROCESS_SCRIPT_VALUE(scline->command);
+}
+
+static void special_steal_hero_process(struct ScriptContext* context)
+{
+    struct PlayerInfo* player = get_player(context->player_idx);
+    TbMapLocation location = context->value->ulongs[0];
+    EffectOrEffElModel effct_id = context->value->longs[1];
+    struct Coord3d pos;
+    if (get_coords_at_location(&pos, location, false))
+    {
+        steal_hero(player, &pos);
+        if (effct_id != 0)
+        {
+            create_used_effect_or_element(&pos, effct_id, player->id_number, 0);
+        }
+    }
+}
+
+static void special_steal_hero_check(const struct ScriptLine* scline)
+{
+    ALLOCATE_SCRIPT_VALUE(scline->command, scline->np[0]);
+    TbMapLocation location;
+    if (!get_map_location_id(scline->tp[1], &location))
+    {
+        SCRPTWRNLOG("Invalid location: %s", scline->tp[1]);
+        DEALLOCATE_SCRIPT_VALUE
+        return;
+    }
+
+    const char* effect_name = scline->tp[2];
+    EffectOrEffElModel effct_id = 0;
+    if (scline->tp[2][0] != '\0')
+    {
+        if (parameter_is_number(effect_name) && atoi(effect_name) == 0)
+        {
+            effct_id = 0;
+        }
+        else
+        {
+            effct_id = effect_or_effect_element_id(effect_name);
+            if (effct_id == 0)
+            {
+                SCRPTERRLOG("Unrecognised effect: %s", effect_name);
+                DEALLOCATE_SCRIPT_VALUE
+                return;
+            }
+        }
+    }
+    else
+    {
+        effct_id = ball_puff_effects[scline->np[0]];
+    }
+
+    value->ulongs[0] = location;
+    value->longs[1] = effct_id;
+    PROCESS_SCRIPT_VALUE(scline->command);
 }
 
 static void script_transfer_creature_check(const struct ScriptLine* scline)
@@ -1709,17 +1782,17 @@ static void move_creature_check(const struct ScriptLine* scline)
     }
 
     const char *effect_name = scline->tp[5];
-    long effct_id = 0;
+    EffectOrEffElModel effct_id = 0;
     if (scline->tp[5][0] != '\0')
     {
-        effct_id = get_rid(effect_desc, effect_name);
-        if (effct_id == -1)
+        if (parameter_is_number(effect_name) && atoi(effect_name) == 0)
         {
-            if (parameter_is_number(effect_name))
-            {
-                effct_id = atoi(effect_name);
-            }
-            else
+            effct_id = 0;
+        }
+        else
+        {
+            effct_id = effect_or_effect_element_id(effect_name);
+            if (effct_id == 0)
             {
                 SCRPTERRLOG("Unrecognised effect: %s", effect_name);
                 return;
@@ -1728,13 +1801,14 @@ static void move_creature_check(const struct ScriptLine* scline)
     }
     else
     {
-        effct_id = -1;
+        effct_id = ball_puff_effects[scline->np[0]];
     }
+
     value->ulongs[0] = location;
     value->longs[1] = select_id;
-    value->shorts[4] = effct_id;
-    value->bytes[10] = count;
-    value->bytes[11] = crmodel;
+    value->shorts[5] = effct_id;
+    value->bytes[12] = count;
+    value->bytes[13] = crmodel;
 
     PROCESS_SCRIPT_VALUE(scline->command);
 }
@@ -1913,11 +1987,13 @@ static void new_trap_type_check(const struct ScriptLine* scline)
 static void set_trap_configuration_process(struct ScriptContext *context)
 {
     set_config_process(&trapdoor_trap_named_fields_set, context, "SET_TRAP_CONFIGURATION");
+    create_manufacture_array_from_trapdoor_data();
 }
 
 static void set_room_configuration_process(struct ScriptContext *context)
 {
     set_config_process(&terrain_room_named_fields_set, context, "SET_ROOM_CONFIGURATION");
+    update_room_tab_to_config();
 }
 
 static void set_hand_rule_process(struct ScriptContext* context)
@@ -1936,9 +2012,9 @@ static void move_creature_process(struct ScriptContext* context)
 {
     TbMapLocation location = context->value->ulongs[0];
     long select_id = context->value->longs[1];
-    long effect_id = context->value->shorts[4];
-    long count = context->value->bytes[10];
-    long crmodel = context->value->bytes[11];
+    EffectOrEffElModel effect_id = context->value->shorts[5];
+    long count = context->value->bytes[12];
+    long crmodel = context->value->bytes[13];
     PlayerNumber plyr_idx = context->player_idx;
 
     script_move_creature_with_criteria(plyr_idx, crmodel, select_id, location, effect_id, count);
@@ -1978,6 +2054,7 @@ static void set_door_configuration_check(const struct ScriptLine* scline)
 static void set_door_configuration_process(struct ScriptContext *context)
 {
     set_config_process(&trapdoor_door_named_fields_set, context, "SET_DOOR_CONFIGURATION");
+    create_manufacture_array_from_trapdoor_data();
 }
 
 static void create_effect_at_pos_process(struct ScriptContext* context)
@@ -1994,7 +2071,7 @@ static void create_effect_process(struct ScriptContext *context)
     struct Coord3d pos;
     if (!get_coords_at_location(&pos, context->value->ulongs[1],true))
     {
-        SCRPTWRNLOG("Could not find location %lu to create effect", context->value->ulongs[1]);
+        SCRPTWRNLOG("Could not find location %" PRIu32 " to create effect", context->value->ulongs[1]);
         return;
     }
     script_create_effect(&pos,context->value->shorts[0],context->value->longs[2]);
@@ -3069,6 +3146,13 @@ static void set_creature_configuration_process(struct ScriptContext* context)
                 crconf->hostile_towards[0] = value; // Then apply the change on the first only.
             }
             break;
+        case 39: // INERTIA
+            crconf->inertia_floor = value;
+            crconf->inertia_air = config_value_secondary;
+            break;
+        case 40: // FALLACCELERATION
+            crconf->fall_acceleration = value;
+            break;
         case ccr_comment:
             break;
         case ccr_endOfFile:
@@ -3536,23 +3620,11 @@ static void set_creature_configuration_process(struct ScriptContext* context)
         case 4: // EYEEFFECT
         {
             crconf->eye_effect = value;
-            struct Thing* thing = thing_get(get_my_player()->influenced_thing_idx);
-            if(thing_exists(thing))
+            for (NetUserId user = 0; user < MAX_NET_USERS; user++)
             {
-                if (thing->model == creatid)
-                {
-                    struct LensConfig* lenscfg = get_lens_config(value);
-                    initialise_eye_lenses();
-                    if (flag_is_set(lenscfg->flags, LCF_HasPalette))
-                    {
-                        PaletteSetPlayerPalette(get_my_player(), lenscfg->palette);
-                    }
-                    else
-                    {
-                        PaletteSetPlayerPalette(get_my_player(), engine_palette);
-                    }
-                    setup_eye_lens(value);
-                }
+                struct Thing* thing = thing_get(get_user_state(user)->controlled_thing_idx);
+                if (thing_is_creature(thing) && (thing->model == creatid) && flag_is_set(thing->alloc_flags, TAlF_IsControlled))
+                    set_player_lens(get_net_user_player_number(user), value);
             }
             break;
         }
@@ -3786,15 +3858,15 @@ static void hide_variable_check(const struct ScriptLine *scline)
 
     value->longs[0] = player_idx;
     value->longs[1] = varib_id;
-    value->bytes[2] = varib_type;
+    value->longs[2] = varib_type;
 
     PROCESS_SCRIPT_VALUE(scline->command);
 }
 
 static void hide_variable_process(struct ScriptContext *context)
 {
-    short varib_id, varib_type, player_idx;
-    varib_type = context->value->bytes[2];
+    int32_t varib_id, varib_type, player_idx;
+    varib_type = context->value->longs[2];
     varib_id = context->value->longs[1];
     player_idx = context->value->longs[0];
     if(varib_id > -1 && varib_type > -1)
@@ -5053,7 +5125,7 @@ static void add_effectgen_to_level_check(const struct ScriptLine* scline)
     }
     value->shorts[0] = (short)gen_id;
     value->ulongs[1] = location;
-    value->shorts[3] = range * COORD_PER_STL;
+    value->shorts[4] = range * COORD_PER_STL;
     PROCESS_SCRIPT_VALUE(scline->command);
 }
 
@@ -5061,7 +5133,7 @@ static void add_effectgen_to_level_process(struct ScriptContext* context)
 {
     ThingModel gen_id = context->value->shorts[0];
     TbMapLocation location = context->value->ulongs[1];
-    short range = context->value->shorts[3];
+    short range = context->value->shorts[4];
     if (get_script_current_condition() == CONDITION_ALWAYS)
     {
         script_process_new_effectgen(gen_id, location, range);
@@ -5478,8 +5550,7 @@ static void set_power_configuration_process(struct ScriptContext *context)
             break;
     }
     update_powers_tab_to_config();
-    struct PlayerInfo *player = get_my_player();
-    if (player->view_type == PVT_DungeonTop)
+    if (get_user_view_type(get_my_user()) == PVT_DungeonTop)
     {
         if (menu_is_active(GMnu_SPELL))
         {
@@ -7044,6 +7115,7 @@ const struct CommandDesc command_desc[] = {
   {"LOCATE_HIDDEN_WORLD",               "        ", Cmd_LOCATE_HIDDEN_WORLD, NULL, NULL},
   {"USE_SPECIAL_LOCATE_HIDDEN_WORLD",   "        ", Cmd_LOCATE_HIDDEN_WORLD, NULL, NULL}, // Legacy command
   {"USE_SPECIAL_TRANSFER_CREATURE",     "P       ", Cmd_USE_SPECIAL_TRANSFER_CREATURE, &special_transfer_creature_check, &special_transfer_creature_process},
+  {"USE_SPECIAL_STEAL_HERO",            "PLa     ", Cmd_USE_SPECIAL_STEAL_HERO, &special_steal_hero_check, &special_steal_hero_process},
   {"TRANSFER_CREATURE",                 "PC!An   ", Cmd_TRANSFER_CREATURE, &script_transfer_creature_check, &script_transfer_creature_process},
   {"CHANGE_CREATURES_ANNOYANCE",        "PC!AN   ", Cmd_CHANGE_CREATURES_ANNOYANCE, &change_creatures_annoyance_check, &change_creatures_annoyance_process},
   {"ADD_TO_FLAG",                       "PAN     ", Cmd_ADD_TO_FLAG, NULL, NULL},

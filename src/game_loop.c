@@ -30,6 +30,8 @@
 #include "game_merge.h"
 #include "sounds.h"
 #include "game_legacy.h"
+#include "replay.h"
+#include "replay_rewind.h"
 #include "game_loop.h"
 #include "lua_triggers.h"
 
@@ -38,6 +40,7 @@
 #include "moonphase.h"
 #include "vidmode.h"
 #include "frontend.h"
+#include "game_saves.h"
 #include "bflib_mouse.h"
 #include "front_simple.h"
 #include "bflib_datetm.h"
@@ -47,6 +50,7 @@
 #include "config_keeperfx.h"
 #include "api.h"
 #include "player_instances.h"
+#include "net_game.h"
 #include "lvl_filesdk1.h"
 #include "config_sounds.h"
 #include "lens_api.h"
@@ -58,8 +62,11 @@
 #include "front_easter.h"
 #include "front_input.h"
 #include "net_exchange_gameplay.h"
+#include "net_spectator.h"
+#include "packets.h"
 #include "timer.h"
 
+#include "kfx/save/SaveManager.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -70,11 +77,12 @@ extern void startup_network_game(CoroutineLoop *context, TbBool local);
 extern void faststartup_network_game(CoroutineLoop *context);
 extern CoroutineLoopState set_not_has_quit(CoroutineLoop *context);
 void update_frontend_delta_time();
-void update_gameplay_delta_time();
 bool use_delta_time();
 
 /******************************************************************************/
 static short do_draw;
+#define REWIND_TURNS_PER_SECOND 60
+static int64_t next_rewind_step_ns;
 static long double average_frame_draw_time = 1;
 
 float interpolate_time = 0;
@@ -304,6 +312,8 @@ void process_dungeon_destroy(struct Thing* heartng)
             // If this is the last heart the player had, finish him
             setup_all_player_creatures_and_diggers_leave_or_die(plyr_idx);
             player->allied_players = to_flag(player->id_number);
+            if (game.game_kind == GKind_MultiGame)
+                reveal_whole_map(player);
         }
     }
     dungeon->heart_destroy_state = 0;
@@ -323,22 +333,12 @@ static void force_application_close()
 {
     extern int frontend_menu_state;
 
-    if (frontend_menu_state == 0)
-    {
-        struct PlayerInfo* player = get_my_player();
-        if (player != INVALID_PLAYER)
-        {
-            set_players_packet_action(player, PckA_ForceApplicationClose, 0, 0, 0, 0);
-        }
-        else
-        {
-            exit_keeper = 1;
-        }
+    TbBool network_paused = network_is_active() && flag_is_set(game.operation_flags, GOF_Paused);
+    if ((frontend_menu_state == 0) && (get_my_player() != INVALID_PLAYER) && !network_paused) {
+        set_players_packet_action(get_my_player(), PckA_ForceApplicationClose, 0, 0, 0, 0);
+        return;
     }
-    else
-    {
-        exit_keeper = 1;
-    }
+    exit_keeper = 1;
 }
 
 static bool keeper_wait_for_screen_focus()
@@ -357,7 +357,7 @@ static bool keeper_wait_for_screen_focus()
           return true;
         LbSleepFor(50);
         update_gameplay_delta_time();
-        game.process_turn_time = 1.0;
+        local_state.process_turn_time = 1.0;
         time_since_last_draw = 1.0;
     } while ((!exit_keeper) && (!quit_game));
     return false;
@@ -374,7 +374,7 @@ static void find_frame_rate(void)
     {
         double time_fdelta = 1000.0*((double)(cntr_time2))/(curr_time-prev_time2);
         prev_time2 = curr_time;
-        game.time_delta = (unsigned long)(time_fdelta*256.0);
+        local_state.time_delta = (uint32_t)(time_fdelta*256.0);
         cntr_time2 = 0;
     }
 }
@@ -392,7 +392,7 @@ static void packet_load_find_frame_rate(unsigned long incr)
     {
         double time_fdelta = 1000.0*((double)(extra_frames+incr))/(curr_time-start_time);
         start_time = curr_time;
-        game.time_delta = (unsigned long)(time_fdelta*256.0);
+        local_state.time_delta = (uint32_t)(time_fdelta*256.0);
         extra_frames = 0;
     }
 }
@@ -404,14 +404,14 @@ static short display_should_be_updated_this_turn(void)
 {
     if ((game.operation_flags & GOF_Paused) != 0)
       return true;
-    if ( (game.turns_fastforward == 0) && (!game.packet_loading_in_progress) )
+    if ( (replay.turns_fastforward == 0) && (!replay.loading_in_progress) )
     {
       find_frame_rate();
-      if ( (game.frame_skip == 0) || ((get_gameturn() % game.frame_skip) == 0) )
+      if ( (local_state.fast_forward == 0) || ((get_gameturn() % local_state.fast_forward) == 0) )
         return true;
     } else
     if ( ((get_gameturn() & 0x3F)==0) ||
-         ((game.packet_loading_in_progress) && ((get_gameturn() & 7)==0)) )
+         ((replay.loading_in_progress) && ((get_gameturn() & 7)==0)) )
     {
       packet_load_find_frame_rate(64);
       return true;
@@ -427,15 +427,22 @@ static long double get_turn_start()
     // Aim to exchange network packets before the turn ends.  If drawing
     // another frame could miss this deadline, skip it.
     // In a 3-4 player game, clients must be 2 frames early.
-    const int frames = 1 + (netstate.my_id != SERVER_ID && game.active_players_count > 2);
-    return 1.0 - frames * average_frame_draw_time * multiplayer_clock_adjust * max(game.frame_skip, 1);
+    const int frames = 1 + (netstate.my_id != SERVER_ID && game.human_players_count > 2);
+    return 1.0 - frames * average_frame_draw_time * multiplayer_clock_adjust * max(local_state.fast_forward, 1);
 }
 
-static void update_multiplayer_clock_adjust()
+static void update_multiplayer_clock_adjust(void)
 {
     multiplayer_clock_adjust = 1.0;
-    if (netstate.my_id == SERVER_ID || ! network_is_active())
+    if (network_is_active() && network_user_is_spectator(netstate.my_id)) {
+        if (network_spectator_is_catching_up()) {
+            multiplayer_clock_adjust = 10.0;
+        }
         return;
+    }
+    if (netstate.my_id == SERVER_ID || !network_is_active()) {
+        return;
+    }
 
     if (game.input_lag_turns == 0)
     {
@@ -459,56 +466,57 @@ static void update_multiplayer_clock_adjust()
 // if networking had its own thread, it wouldn't need the yield that calls this function, but for now it does
 void gameplay_loop_draw()
 {
+    if (network_is_active()) {
+        netstate.sp->update(NULL);
+    }
     if (use_delta_time())
         do_draw = true;
 
     update_gameplay_delta_time();
+    if (local_state.rewinding)
+        local_state.process_turn_time = 1.0;
 
-    if (game.process_turn_time > 1.0 && time_since_last_draw < 1.0)
+    if ((local_state.process_turn_time > 1.0 || local_state.fast_forward >= GAME_FAST_FORWARD_MAX) && time_since_last_draw < 1.0)
         do_draw = false;
 
-    // Frame rate limiter
-    if (fps_limit_current > 0)
-    {
+    const TbBool renderer_busy = do_draw && !RendererCanPresent();
+    if ((fps_limit_current > 0 && process_frame_time < 1.0) || renderer_busy) {
+        do_draw = false;
         frametime_start_measurement(Frametime_Sleep);
-        if (process_frame_time < 1.0)
-        {
-            if (game.process_turn_time < 1.0)
-                SDL_Delay(1);
-            do_draw = false;
-        }
-        else
-        {
-            process_frame_time = min(1.L, process_frame_time - 1.L);
+        const long double turns_per_millisecond = turns_per_second * multiplayer_clock_adjust * max(local_state.fast_forward, 1) / 1000.L;
+        if (local_state.process_turn_time + turns_per_millisecond < 1.0) {
+            SDL_Delay(1);
         }
         frametime_end_measurement(Frametime_Sleep);
+        return;
     }
 
     // Floats are used a lot in the drawing related functions. But keep in mind integers are typically preferred for logic related functions.
     frametime_start_measurement(Frametime_Draw);
 
-    // Update lights
-    update_light_render_area();
-
     if (quit_game || exit_keeper) {
         do_draw = false;
     }
     if ( do_draw ) {
+        // Frame rate limiter
+        if (fps_limit_current > 0) {
+            process_frame_time = min(1.L, process_frame_time - 1.L);
+        }
+        // Update lights
+        update_light_render_area();
         if (frametime_enabled())
             framerate_measurement_capture(Framerate_Draw);
-        game.delta_time = min(time_since_last_draw, 1.L);
+        local_state.delta_time = min(time_since_last_draw, 1.L);
         time_since_last_draw = 0;
-        interpolate_time = min(max(game.process_turn_time, 0.L), 1.L);
+        interpolate_time = min(max(local_state.process_turn_time, 0.L), 1.L);
         keeper_screen_redraw();
     }
     keeper_wait_for_screen_focus();
     // Direct information/error messages
-    if (RendererLockFramebuffer() == Lb_SUCCESS) {
-        if ( do_draw ) {
-            perform_any_screen_capturing();
-        }
+    if (do_draw && RendererBeginFrame()) {
+        perform_any_screen_capturing();
         draw_onscreen_direct_messages();
-        RendererUnlockFramebuffer();
+        RendererEndFrame();
     }
     // Move the graphics window to center of screen buffer and swap screen
     if ( do_draw ) {
@@ -525,12 +533,16 @@ void gameplay_loop_draw()
 
 void network_yield_waiting_gameplay_packets()
 {
-    poll_inputs();
+    lbBufferKeyPresses = true;
+    if (!poll_inputs()) {
+        exit_keeper = 1;
+    }
+    lbBufferKeyPresses = false;
     gameplay_loop_draw();
     update_gameplay_delta_time();
     // Reduce game speed during lag spikes.
-    if (game.process_turn_time > 2.0)
-        game.process_turn_time = 2.0;
+    if (local_state.process_turn_time > 2.0)
+        local_state.process_turn_time = 2.0;
 }
 
 static void gameplay_loop_logic()
@@ -544,8 +556,8 @@ static void gameplay_loop_logic()
             {
                 game.paused_at_gameturn = true;
 
-                game.frame_skip = 0;
-                if(game.packet_load_enable)
+                local_state.fast_forward = 0;
+                if(replay.load_enable)
                 {
                     disable_packet_mode();
                 }
@@ -559,13 +571,9 @@ static void gameplay_loop_logic()
     {
         update_gameplay_delta_time();
         const long double turn_start = get_turn_start();
-        if (game.process_turn_time < turn_start)
+        if (local_state.process_turn_time < turn_start)
             return;
     }
-
-    frametime_start_measurement(Frametime_Logic);
-    if (frametime_enabled())
-        framerate_measurement_capture(Framerate_Logic);
 
 #ifdef FUNCTESTING
     if(flag_is_set(start_params.functest_flags, FTF_Enabled))
@@ -581,19 +589,76 @@ static void gameplay_loop_logic()
 #endif // FUNCTESTING
     do_draw = display_should_be_updated_this_turn() || (!LbIsActive());
     poll_inputs();
+    const TbBool rewind_held = is_game_key_pressed(Gkey_DumpToOldPos, false, true) && !a_menu_window_is_active()
+        && !flag_is_set(get_local_user_state()->init_flags, UsrIF_NewMPMessage);
+    local_state.rewinding = rewind_held && replay_rewind_available();
+    if (local_state.rewinding)
+    {
+        const int64_t now = get_time_tick_ns();
+        if (now >= next_rewind_step_ns)
+        {
+            next_rewind_step_ns = now + 1000000000 / REWIND_TURNS_PER_SECOND;
+            replay_rewind_step();
+        } else
+            LbSleepFor(1);
+        do_draw = true;
+        return;
+    }
     input_eastegg();
     input();
-    exchange_packets();
+    if (exchange_packets() == PExR_Wait) {
+        return;
+    }
+    frametime_start_measurement(Frametime_Logic);
+    if (frametime_enabled()) {
+        framerate_measurement_capture(Framerate_Logic);
+    }
     update_multiplayer_clock_adjust();
     update_gameplay_delta_time();
-    if (game.process_turn_time > turns_per_second + 1)
-        game.process_turn_time = turns_per_second + 1;
-    while (game.process_turn_time < 1.0)
+    if (timer_enabled())
+    {
+        if (TimerGame)
+        {
+            TbBool won_level = (get_my_player()->victory_state == VicS_WonLevel);
+            if (!won_level)
+            {
+                TimerTurns = get_gameturn();
+            }
+            if (TimerGameReal)
+            {
+                if (!won_level)
+                {
+                    if (TimerTurns != 0)
+                    {
+                        uint32_t turns = turns_per_second;
+                        if (local_state.fast_forward > 0)
+                        {
+                            turns *= local_state.fast_forward;
+                        }
+                        if (TimerTurns % turns == 0)
+                        {
+                            update_game_time(&GameT, &GameSeconds);
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            if (!TimerFreeze)
+            {
+                update_time();
+            }
+        }
+    }
+    if (local_state.process_turn_time > turns_per_second + 1)
+        local_state.process_turn_time = turns_per_second + 1;
+    while (local_state.process_turn_time < 1.0)
     {
         gameplay_loop_draw();
         update_gameplay_delta_time();
     }
-    game.process_turn_time -= 1.0;
+    local_state.process_turn_time -= 1.0;
 
     update();
 
@@ -623,12 +688,12 @@ static TbBool keeper_wait_for_next_turn(void)
         // No idea when such situation occurs
         tick_ns_one_frame = tick_ns_one_sec;
     }
-    if (game.frame_skip >= 0)
+    if (local_state.fast_forward >= 0)
     {
         // Standard delaying system
         int32_t num_fps = turns_per_second;
-        if (game.frame_skip > 0)
-            num_fps *= game.frame_skip;
+        if (local_state.fast_forward > 0)
+            num_fps *= local_state.fast_forward;
 
         tick_ns_one_frame = tick_ns_one_sec/num_fps;
     }
@@ -639,7 +704,7 @@ static TbBool keeper_wait_for_next_turn(void)
         long double tick_ns_cur = get_time_tick_ns();
         long double tick_ns_used = tick_ns_cur - tick_ns_last_turn;
         long double tick_ns_delay = tick_ns_one_frame - tick_ns_used;
-        if (multiplayer_speed_adjustment_ns != 0) {
+        if (multiplayer_speed_adjustment_ns != 0 && !network_user_is_spectator(netstate.my_id)) {
             tick_ns_delay += multiplayer_speed_adjustment_ns;
         }
 
@@ -661,7 +726,7 @@ static void gameplay_loop_timestep()
     if (! use_delta_time()) {
         frametime_start_measurement(Frametime_Sleep);
         // Make delay if the machine is too fast
-        if ( (!game.packet_load_enable) || (game.turns_fastforward == 0) ) {
+        if (((!replay.load_enable) || (replay.turns_fastforward == 0)) && !local_state.rewinding) {
             keeper_wait_for_next_turn();
         }
         frametime_end_measurement(Frametime_Sleep);
@@ -670,10 +735,8 @@ static void gameplay_loop_timestep()
 
 static void keeper_gameplay_loop(void)
 {
-    struct PlayerInfo *player;
     SYNCDBG(5,"Starting");
-    player = get_my_player();
-    PaletteSetPlayerPalette(player, engine_palette);
+    PaletteSetUserPalette(get_local_user(), engine_palette);
     if ((game.operation_flags & GOF_SingleLevel) != 0) {
         initialise_eye_lenses();
     }
@@ -720,7 +783,7 @@ static TbBool should_use_delta_time_on_menu()
         case FeSt_LEVEL_SELECT:
         case FeSt_CAMPAIGN_SELECT:
         case FeSt_MAPPACK_SELECT:
-        case FeSt_MP_MAPPACK_SELECT:
+        case FeSt_SKIRMISH_LOBBY:
         case FeSt_LAND_VIEW:
         case FeSt_NETLAND_VIEW:
         case FeSt_TORTURE:
@@ -741,12 +804,13 @@ static TbBool faststartup_saved_packet_game(void)
         player->display_flags &= ~PlaF6_PlyrHasQuit;
     }
     set_gui_visible(false);
-    clear_flag(game.operation_flags, GOF_ShowPanel);
+    local_state.show_panel = false;
     return true;
 }
 
 static TbBool wait_at_frontend(void)
 {
+    static char failed_load_campaign[DISKPATH_SIZE];
     struct PlayerInfo *player;
     // This is an improvised coroutine-like stuff
     CoroutineLoop loop;
@@ -760,7 +824,7 @@ static TbBool wait_at_frontend(void)
     if (game.mode_flags & MFlg_IsDemoMode)
     {
       close_packet_file();
-      game.packet_load_enable = 0;
+      replay.load_enable = 0;
     }
     game.save_game_slot = -1;
     // Make sure campaigns are loaded
@@ -806,7 +870,7 @@ static TbBool wait_at_frontend(void)
         set_selected_level_number(first_singleplayer_level());
     }
     // Init load/save catalogue
-    initialise_load_game_slots();
+    SaveManager_InitialiseSlots();
 
     #ifdef FUNCTESTING
     if(flag_is_set(start_params.functest_flags, FTF_Enabled)) //override for functional tests
@@ -835,7 +899,7 @@ static TbBool wait_at_frontend(void)
     #endif
 
     // Prepare to enter PacketLoad game
-    if ((game.packet_load_enable) && (!game.packet_load_initialized))
+    if (replay.load_enable)
     {
       if (!faststartup_saved_packet_game())
           exit_keeper = true;
@@ -867,7 +931,14 @@ static TbBool wait_at_frontend(void)
     }
     memset(scratch, 0, PALETTE_SIZE);
     RendererPaletteSet(scratch);
-    frontend_set_state(get_startup_menu_state());
+    FrontendMenuState startup_state = get_startup_menu_state();
+    if (failed_load_campaign[0] != '\0') {
+        if (SaveManager_ResumeCampaign(failed_load_campaign)) {
+            startup_state = FeSt_LAND_VIEW;
+        }
+        failed_load_campaign[0] = '\0';
+    }
+    frontend_set_state(startup_state);
 
     // Once the Mouse Sprite initialization is complete, the sprite's position needs to be reset because it defaults to (0, 0).
     // Note that we cannot use LbMoveGameCursorToHostCursor for this, because the buffer position may remain unchanged.
@@ -875,6 +946,7 @@ static TbBool wait_at_frontend(void)
 
     try_restore_frontend_error_box();
 
+    memset(lbKeyPressed, 0, sizeof(lbKeyPressed));
     poll_inputs();
     clear_mouse_pressed_lrbutton();
 
@@ -910,7 +982,7 @@ static TbBool wait_at_frontend(void)
         break; // end while
       }
 
-      if ((!finish_menu) && (LbIsActive()))
+      if ((!finish_menu) && (LbIsActive() || !freeze_game_on_focus_lost()))
       {
         frontend_draw();
         RendererPresentFrame();
@@ -932,7 +1004,7 @@ static TbBool wait_at_frontend(void)
         } else {
           int32_t frame_time;
           frame_time = max(1, 1000 / turns_per_second);
-          game.delta_time = 1;
+          local_state.delta_time = 1;
           LbSleepUntil(fe_last_loop_time + frame_time);
         }
       }
@@ -965,29 +1037,31 @@ static TbBool wait_at_frontend(void)
     case FeSt_START_KPRLEVEL:
           my_player_number = default_loc_player;
           game.game_kind = GKind_LocalGame;
-          clear_flag(game.system_flags, GSF_NetworkActive);
-          player = get_my_player();
-          player->is_active = 1;
+          clear_flag(local_system_flags, GSF_NetworkActive);
           startup_network_game(&loop, true);
           break;
     case FeSt_START_MPLEVEL:
-          set_flag(game.system_flags, GSF_NetworkActive);
+          memset(&intralvl, 0, sizeof(struct IntralevelData));
+          clear_custom_intralevel_data();
+          set_flag(local_system_flags, GSF_NetworkActive);
           skip_high_score_screen = 1;
           game.game_kind = GKind_MultiGame;
-          player = get_my_player();
-          player->is_active = 1;
           startup_network_game(&loop, false);
           break;
     case FeSt_LOAD_GAME:
           flgmem = game.save_game_slot;
-          clear_flag(game.system_flags, GSF_NetworkActive);
+          clear_flag(local_system_flags, GSF_NetworkActive);
           RendererClearScreen(0);
           RendererPresentFrame();
           level_load_time_phase(LevelLoadTime_Data);
-          if (!load_game(game.save_game_slot))
           {
-              ERRORLOG("Loading game %d failed; quitting.",(int)game.save_game_slot);
-              quit_game = 1;
+              enum SaveCheckResult why;
+              if (SaveManager_Load(game.save_game_slot, &why) != SvLoad_Done)
+              {
+                  frontend_load_game_failed(SaveManager_CheckMessage(why));
+                  game.save_game_slot = flgmem;
+                  return false;
+              }
           }
           level_load_time_phase(LevelLoadTime_GameSetup);
           game.save_game_slot = flgmem;
@@ -998,7 +1072,7 @@ static TbBool wait_at_frontend(void)
               coroutine_clear(&loop, true);
           else {
               set_gui_visible(false);
-              clear_flag(game.operation_flags, GOF_ShowPanel);
+              local_state.show_panel = false;
           }
           break;
     }
@@ -1012,6 +1086,15 @@ static TbBool wait_at_frontend(void)
         return false;
     }
     return true;
+}
+
+static TbBool user_skips_heart_zoom(NetUserId user)
+{
+    const struct UserState *host = get_user_state(SERVER_ID);
+    const struct UserState *ustate = get_user_state(user);
+    if (user_state_invalid(ustate))
+        ustate = host;
+    return (game.game_kind == GKind_LocalGame) && (host->prefs[UPref_SkipHeartZoom] != 0) && (ustate->prefs[UPref_SkipHeartZoom] != 0);
 }
 
 void game_loop(void)
@@ -1035,33 +1118,21 @@ void game_loop(void)
       int32_t mspos_x_bak = lbDisplay.MMouseX;
       int32_t mspos_y_bak = lbDisplay.MMouseY;
 
-      if (game.game_kind == GKind_LocalGame)
-      {
-        if (game.save_game_slot == -1)
-        {
-            if (is_feature_on(Ft_SkipHeartZoom) == false) {
-                for (int i = 0; i < PLAYERS_COUNT; i++) {
-                    struct PlayerInfo *player = get_player(i);
-                    if (player_exists(player) && ((player->allocflags & PlaF_CompCtrl) == 0)) {
-                        set_player_instance(player, PI_HeartZoom, 0);
-                    }
-                }
-            } else {
-                if (!game.packet_load_enable) {
-                    toggle_status_menu(1); // Required when skipping PI_HeartZoom
-                }
-            }
-        } else
-        {
-          game.save_game_slot = -1;
-        }
-      } else {
-          for (int i = 0; i < PLAYERS_COUNT; i++) {
-              struct PlayerInfo *player = get_player(i);
-              if (player_exists(player) && ((player->allocflags & PlaF_CompCtrl) == 0)) {
-                  set_player_instance(player, PI_HeartZoom, 0);
+      if (((game.game_kind != GKind_LocalGame) || (game.save_game_slot == -1)) && (!network_is_active() || net_join_role != NetRole_Spectator)) {
+          for (NetUserId user = 0; user < MAX_NET_USERS; user++) {
+              if (!user_present(user))
+                  continue;
+              struct PlayerInfo *player = get_user_player(user);
+              if (player_exists(player) && ((player->allocflags & PlaF_CompCtrl) == 0) && !user_skips_heart_zoom(user)) {
+                  set_user_instance(user, PI_HeartZoom, 0);
               }
           }
+          if (user_skips_heart_zoom(get_my_user()) && !replay.load_enable) {
+              toggle_status_menu(1); // Required when skipping PI_HeartZoom
+          }
+      } else
+      {
+          game.save_game_slot = -1;
       }
 
       // Try to keep the mouse position unchanged when entering the level.
@@ -1078,11 +1149,17 @@ void game_loop(void)
       // get_my_dungeon() can't be used here because players are not initialized yet
       dungeon = get_dungeon(my_player_number);
       starttime = LbTimerClock();
-      dungeon->lvstats.start_time = starttime;
-      dungeon->lvstats.end_time = starttime;
+      if (!network_is_active() || net_join_role != NetRole_Spectator) {
+          dungeon->lvstats.start_time = starttime;
+          dungeon->lvstats.end_time = starttime;
+      }
+      GameSeconds = 0;
+      GameT.Seconds = 0;
+      GameT.Minutes = 0;
+      GameT.Hours = 0;
       if (!TimerNoReset)
       {
-          if (is_feature_on(Ft_SkipHeartZoom))
+          if (user_skips_heart_zoom(get_my_user()))
           {
               timerstarttime = starttime;
           }
@@ -1094,7 +1171,7 @@ void game_loop(void)
       }
       RendererClearScreen(0);
       RendererPresentFrame();
-      game.frame_skip = 0;
+      local_state.fast_forward = 0;
       keeper_gameplay_loop();
       set_pointer_graphic_none();
       RendererClearScreen(0);
@@ -1121,12 +1198,12 @@ void game_loop(void)
       SYNCDBG(0,"Play time is %lu seconds",playtime>>10);
       reset_eye_lenses();
       close_packet_file();
-      game.packet_load_enable = false;
-      game.packet_save_enable = false;
+      replay.load_enable = false;
+      replay.save_enable = false;
     } // end while
 
     // Stop the movie recording if it's on
-    if ((game.system_flags & GSF_CaptureMovie) != 0) {
+    if ((local_system_flags & GSF_CaptureMovie) != 0) {
         movie_record_stop();
     }
     ShutDownSDLAudio();

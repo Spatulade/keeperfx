@@ -3,6 +3,7 @@
 #include "cdrom.h"
 #include "bflib_sndlib.h"
 #include "bflib_datetm.h"
+#include "game_legacy.h"
 #include "bflib_sound.h"
 #include "bflib_fileio.h"
 #include <AL/al.h>
@@ -31,6 +32,7 @@
 #include <atomic>
 #include <cmath>
 
+#include "keeperfx.hpp"
 #include "post_inc.h"
 
 namespace {
@@ -512,24 +514,42 @@ void load_sound_banks() {
 	}
 	g_banks[0] = load_sound_bank(snd_fname);
 	g_banks[1] = load_sound_bank(spc_fname);
+	LbJustLog("Loaded %s (%d samples), %s (%d samples)\n",
+		snd_fname, (int)g_banks[0].size(), spc_fname, (int)g_banks[1].size());
 	g_speech_offset = (SoundSmplTblID)g_banks[0].size();
 	g_custom_offset = g_speech_offset + (SoundSmplTblID)g_banks[1].size();
 }
 
 void print_device_info() {
+	const char * devices;
+	const char * default_device;
 	if (alcIsExtensionPresent(nullptr, "ALC_ENUMERATE_ALL_EXT")) {
-		const auto devices = alcGetString(nullptr, ALC_ALL_DEVICES_SPECIFIER);
-		for (auto device = devices; device[0] != 0; device += strlen(device)) {
-			// Device enumeration
-		}
+		devices = alcGetString(nullptr, ALC_ALL_DEVICES_SPECIFIER);
+		default_device = alcGetString(nullptr, ALC_DEFAULT_ALL_DEVICES_SPECIFIER);
 	} else if (alcIsExtensionPresent(nullptr, "ALC_ENUMERATION_EXT")) {
-		const auto devices = alcGetString(nullptr, ALC_DEVICE_SPECIFIER);
-		for (auto device = devices; device[0] != 0; device += strlen(device)) {
-			// Device enumeration
-		}
+		devices = alcGetString(nullptr, ALC_DEVICE_SPECIFIER);
+		default_device = alcGetString(nullptr, ALC_DEFAULT_DEVICE_SPECIFIER);
 	} else {
-		// Cannot enumerate devices :(
+		return;
 	}
+	if (devices == nullptr || devices[0] == 0) {
+		LbJustLog("Audio devices: none\n");
+		return;
+	}
+	if (default_device == nullptr) {
+		default_device = "";
+	}
+	LbJustLog("Audio devices:");
+	const char * separator = " ";
+	for (auto device = devices; device[0] != 0; device += strlen(device) + 1) {
+		const char * suffix = "";
+		if (strcmp(device, default_device) == 0) {
+			suffix = " (default)";
+		}
+		LbJustLog("%s%s%s", separator, device, suffix);
+		separator = ", ";
+	}
+	LbJustLog("\n");
 }
 
 // The currently-playing streamed speech sample (played on g_speech_track).
@@ -942,7 +962,7 @@ extern "C" void StopAllSamples() {
 
 extern "C" TbBool InitAudio(const SoundSettings * settings) {
 	try {
-		if (game.easter_eggs_enabled == true) {
+		if (start_params.easter_egg == true) {
 			TbDate date;
 			LbDate(&date);
 			g_bb_king_mode |= ((date.Day == 1) && (date.Month == 2));
@@ -1167,7 +1187,7 @@ extern "C" SoundMilesID play_sample(
 				return source.mss_id;
 			}
 		}
-		if (game.frame_skip < 2) {
+		if (local_state.fast_forward < 2) {
 			ERRORLOG("Can't play sample %d, too many samples playing at once", smptbl_id);
 		}
 		return 0;

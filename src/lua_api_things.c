@@ -25,6 +25,7 @@
 #include "thing_physics.h"
 #include "magic_powers.h"
 #include "config_crtrstates.h"
+#include "creature_instances.h"
 #include "creature_states_mood.h"
 #include "thing_stats.h"
 #include "local_camera.h"
@@ -139,6 +140,15 @@ static int lua_creature_walk_to(lua_State *L)
     return 1;
 }
 
+static int lua_creature_set_start_state(lua_State *L)
+{
+    struct Thing *thing = luaL_checkCreature(L, 1);
+
+    CrtrStateId state = set_start_state(thing);
+    lua_pushstring(L, get_conf_parameter_text(creatrstate_desc, state));
+    return 1;
+}
+
 static int lua_kill_creature(lua_State *L)
 {
     struct Thing* thing = luaL_checkCreature(L, 1);
@@ -192,7 +202,7 @@ static int lua_remove_creature_from_play(lua_State *L)
     if (thing_is_picked_up(thing)) {
         return luaL_error(L, "creature is already out of play");
     }
-    if (is_thing_some_way_controlled(thing)) {
+    if (user_controls_thing(ANY_USER, thing, UCT_Selected)) {
         prepare_to_controlled_creature_death(thing);
     }
     struct CreatureControl *cctrl = creature_control_get_from_thing(thing);
@@ -254,7 +264,7 @@ static int lua_Change_creature_owner(lua_State *L)
 {
     struct Thing* thing = luaL_checkThing(L, 1);
     PlayerNumber new_owner = luaL_checkPlayerSingle(L, 2);
-    if (is_thing_some_way_controlled(thing))
+    if (user_controls_thing(ANY_USER, thing, UCT_Selected))
     {
         //does not kill the creature, but does the preparations needed for when it is possessed
         prepare_to_controlled_creature_death(thing);
@@ -310,17 +320,17 @@ static int thing_set_field(lua_State *L) {
         // Re-sync first-person camera with creature orientation
         struct PlayerInfo* player = get_my_player();
         if (!player_invalid(player)
-            && player->controlled_thing_idx == thing->index
-            && player->view_mode == PVM_CreatureView)
+            && get_local_user_state()->controlled_thing_idx == thing->index
+            && (get_user_view_type(get_my_user()) == PVT_CreatureContrl || get_user_view_type(get_my_user()) == PVT_CreaturePasngr))
         {
-            set_local_camera_destination(player);
+            set_local_camera_destination(get_my_user());
         }        
     } else if (strcmp(key, "pitch") == 0) 
     {
         thing->move_angle_z = luaL_checkinteger(L, 3);
     } else if (strcmp(key, "owner") == 0) {
         PlayerNumber new_owner = luaL_checkPlayerSingle(L, 3);
-        if (is_thing_some_way_controlled(thing)) {
+        if (user_controls_thing(ANY_USER, thing, UCT_Selected)) {
             prepare_to_controlled_creature_death(thing);
         }
         change_creature_owner(thing, new_owner);
@@ -347,6 +357,7 @@ static int thing_set_field(lua_State *L) {
         struct Coord3d pos;
         luaL_checkCoord3d(L, 3, &pos);
         move_thing_in_map(thing, &pos);
+        reset_interpolation_of_thing(thing);
     } else if (strcmp(key, "anim_sprite") == 0)
     {
         set_thing_animation(thing, luaL_checkAnimationId(L, 3), -1);
@@ -429,12 +440,45 @@ static int thing_set_field(lua_State *L) {
         } else if (strcmp(key, "party_target_player") == 0)
         {
             cctrl->party.target_plyr_idx = luaL_checkPlayerSingle(L, 3);
+        } else if (strcmp(key, "countdown") == 0)
+        {
+            lua_Integer value = luaL_checkinteger(L, 3);
+            if (value < SHRT_MIN || value > SHRT_MAX) {
+                return luaL_error(L, "Creature countdown out of range (-32768..32767)");
+            }
+            cctrl->countdown = (short)value;
         } else if (strcmp(key, "state") == 0)
         {
             internal_set_thing_state(thing, luaL_checkNamedCommand(L, 3, creatrstate_desc));
         } else if (strcmp(key, "continue_state") == 0)
         {
             thing->continue_state = luaL_checkNamedCommand(L, 3, creatrstate_desc);
+        } else if (strcmp(key, "instance") == 0)
+        {
+            //Lua stack: 1 = thing, 2 = key, 3 = value
+            int stackcount = lua_gettop(L);
+            int inst_pos = 3;
+            if (lua_istable(L, 3)) {
+                //unpack table content onto stack
+                lua_rawgeti(L, 3, 1);       // {1} instance
+                lua_rawgeti(L, 3, 2);       // {2} target, may be nil
+                //instance is now on stackposition 4
+                inst_pos = stackcount + 1;
+            }
+            CrInstance inst_idx = luaL_checkNamedCommand(L, inst_pos, instance_desc);
+            ThingIndex targtng_idx = 0;
+            // without table, stack position 5 doesnt exist
+            if (!lua_isnoneornil(L, stackcount + 2)) {
+                targtng_idx = luaL_checkThing(L, stackcount + 2)->index;
+            }
+            // drop what we pushed on the stack
+            lua_settop(L, stackcount);
+
+            if (inst_idx == CrInst_NULL) {
+                clear_creature_instance(thing);
+            } else {
+                set_creature_instance(thing, inst_idx, targtng_idx, NULL);
+            }
         } else if (strcmp(key, "hunger_amount") == 0)
         {
             cctrl->hunger_amount = luaL_checkinteger(L, 3);
@@ -500,6 +544,24 @@ static int thing_set_field(lua_State *L) {
         {
             return luaL_error(L, "Field '%s' is not writable on Trap thing", key);
         }
+    } else if (thing->class_id == TCls_Shot)
+    {
+        if (strcmp(key, "target") == 0) {
+            if (lua_isnil(L, 3)) {
+                thing->shot.target_idx = 0;
+            } else {
+                struct Thing* target = luaL_checkThing(L, 3);
+                thing->shot.target_idx = target->index;
+            }
+        } else if (strcmp(key, "damage") == 0) {
+            lua_Integer value = luaL_checkinteger(L, 3);
+            if (value < SHRT_MIN || value > SHRT_MAX) {
+                return luaL_error(L, "damage out of range (-32768..32767)");
+            }
+            thing->shot.damage = (short)value;
+        } else {
+            return luaL_error(L, "Field '%s' is not writable on Shot thing", key);
+        }
     } else
     {
         return luaL_error(L, "Field '%s' is not writable on Thing", key);
@@ -559,6 +621,8 @@ static int thing_get_field(lua_State *L) {
         lua_pushboolean(L, thing_is_picked_up(thing));
     } else if (strcmp(key, "thing_class") == 0) {
         lua_pushstring(L, thing_class_code_name(thing->class_id));
+    } else if (strcmp(key, "parent") == 0) {
+        lua_pushParent(L, thing);
     } else if (try_get_from_methods(L, 1, key)) {
         return 1;
     }
@@ -602,18 +666,49 @@ static int thing_get_field(lua_State *L) {
             lua_pushinteger(L, cctrl->opponents_ranged_count);
         } else if (strcmp(key, "opponents_count") == 0) {
             lua_pushinteger(L, (cctrl->opponents_melee_count + cctrl->opponents_ranged_count));
+        } else if (strcmp(key, "battle_enemy") == 0) {
+            struct Thing* enmtng = INVALID_THING;
+            // only read if a real enemy fight happens
+            if (cctrl->combat_flags != 0)
+            {
+                enmtng = thing_get(cctrl->combat.battle_enemy_idx);
+                if (!thing_exists(enmtng) || (enmtng->creation_turn != cctrl->combat.battle_enemy_crtn)) {
+                    enmtng = INVALID_THING;
+                }
+            }
+            lua_pushThing(L, enmtng);
+        } else if (strcmp(key, "combat_type") == 0) {
+            if (flag_is_set(cctrl->combat_flags, CmbtF_Melee)) {
+                lua_pushstring(L, "MELEE");
+            } else if (flag_is_set(cctrl->combat_flags, CmbtF_Ranged)) {
+                lua_pushstring(L, "RANGED");
+            } else if (flag_is_set(cctrl->combat_flags, CmbtF_Waiting)) {
+                lua_pushstring(L, "WAITING");
+            } else if (flag_is_set(cctrl->combat_flags, CmbtF_ObjctFight)) {
+                lua_pushstring(L, "OBJECT");
+            } else if (flag_is_set(cctrl->combat_flags, CmbtF_DoorFight)) {
+                lua_pushstring(L, "DOOR");
+            } else {
+                lua_pushnil(L);
+            }
+        } else if (strcmp(key, "battle_id") == 0) {
+            lua_pushinteger(L, cctrl->battle_id);
         } else if (strcmp(key, "force_health_flower_displayed") == 0) {
             lua_pushinteger(L, cctrl->force_health_flower_displayed);
         } else if (strcmp(key, "force_health_flower_hidden") == 0) {
             lua_pushinteger(L, cctrl->force_health_flower_hidden);
         } else if (strcmp(key, "hand_blocked_turns") == 0) {
             lua_pushinteger(L, cctrl->hand_blocked_turns);
+        } else if (strcmp(key, "countdown") == 0) {
+            lua_pushinteger(L, cctrl->countdown);
         } else if (strcmp(key, "state") == 0) {
             lua_pushstring(L, get_conf_parameter_text(creatrstate_desc, thing->active_state));
         } else if (strcmp(key, "state_besides_interruptions") == 0) {
             lua_pushstring(L, get_conf_parameter_text(creatrstate_desc, get_creature_state_besides_interruptions(thing)));
         } else if (strcmp(key, "continue_state") == 0) {
             lua_pushstring(L, get_conf_parameter_text(creatrstate_desc, thing->continue_state));
+        } else if (strcmp(key, "instance") == 0) {
+            lua_pushstring(L, get_conf_parameter_text(instance_desc, cctrl->instance_id));
         } else if (strcmp(key, "workroom") == 0) {
             lua_pushRoom(L, room_get(cctrl->work_room_id));
         } else if (strcmp(key, "moveto_pos") == 0) {
@@ -658,6 +753,21 @@ static int thing_get_field(lua_State *L) {
             lua_pushinteger(L, thing->custom_box.box_kind);
         } else {
             return luaL_error(L, "Unknown field or method '%s' for Special box thing", key);
+        }
+    } else if (thing->class_id == TCls_Shot)
+    {
+        if (strcmp(key, "target") == 0) {
+            struct Thing* targettng = thing_get(thing->shot.target_idx);
+            if (!thing_exists(targettng)) {
+                targettng = INVALID_THING;
+            }
+            lua_pushThing(L, targettng);
+        } else if (strcmp(key, "damage") == 0) {
+            lua_pushinteger(L, thing->shot.damage);
+        } else if (strcmp(key, "originpos") == 0) {
+            lua_pushPos(L, &thing->shot.originpos);
+        } else {
+            return luaL_error(L, "Unknown field or method '%s' for Shot thing", key);
         }
     } else {
         return luaL_error(L, "Unknown or unavailable field or method '%s' for Thing", key);
@@ -733,6 +843,7 @@ static int thing_eq(lua_State *L) {
 static const struct luaL_Reg thing_methods[] = {
     {"make_thing_zombie"            ,make_thing_zombie                  },
     {"walk_to"                      ,lua_creature_walk_to               },
+    {"set_start_state"              ,lua_creature_set_start_state       },
     {"kill"                         ,lua_kill_creature                  },
     {"stun"                         ,lua_stun_creature                  },
     {"remove_from_play"             ,lua_remove_creature_from_play     },

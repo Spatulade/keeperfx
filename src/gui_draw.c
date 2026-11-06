@@ -134,13 +134,13 @@ void draw_slab64k_background_immediate(long pos_x, long pos_y, long width, long 
         scr_y = 0;
         scr_h = i;
     }
-    i = lbDisplay.PhysicalScreenWidth * pixel_size;
+    i = RendererPhysicalWidth() * pixel_size;
     if (scr_x + scr_w > i)
         scr_w = i - scr_x;
     i = MyScreenHeight;
     if (scr_y + scr_h > i)
         scr_h = i - scr_y;
-    TbPixel* out = &lbDisplay.WScreen[scr_x + lbDisplay.GraphicsScreenWidth * scr_y];
+    TbPixel* out = &lbDisplay.WScreen[scr_x + RendererScreenWidth() * scr_y];
     for (i=0; scr_h > i; i++)
     {
         TbPixel* inp = &gui_slab[GUI_SLAB_DIMENSION * (i % GUI_SLAB_DIMENSION)];
@@ -159,7 +159,7 @@ void draw_slab64k_background_immediate(long pos_x, long pos_y, long width, long 
         {
             memcpy(out, inp, scr_w);
         }
-        out += lbDisplay.GraphicsScreenWidth;
+        out += RendererScreenWidth();
     }
 }
 
@@ -277,55 +277,75 @@ void draw_ornate_slab_outline64k(long pos_x, long pos_y, int units_per_px, long 
     RendererClearDrawFlags(Lb_SPRITE_FLIP_HORIZ);
 }
 
-void draw_round_slab64k(long pos_x, long pos_y, int units_per_px, long width, long height, long style_type)
+static void draw_round_slab_sprite(long pos_x, long pos_y, int units_per_px, const struct TbSprite *spr, const unsigned char *cmap)
+{
+    if (cmap != NULL)
+        LbSpriteDrawResizedRemap(pos_x, pos_y, units_per_px, spr, cmap);
+    else
+        LbSpriteDrawResized(pos_x, pos_y, units_per_px, spr);
+}
+
+void draw_round_slab64k_remap(int32_t pos_x, int32_t pos_y, int units_per_px, int32_t width, int32_t height, int32_t style_type, const unsigned char *cmap, TbPixel fill_colour)
 {
     unsigned short drwflags_mem = RendererGetDrawFlags();
-    RendererClearDrawFlags(Lb_SPRITE_OUTLINE);
+    int32_t fill_inset = scale_ui_value_lofi(4);
+    /* Keep the fill out of the rounded outer edge, but cover the transparent
+       interior of the larger corner and button sprites. */
+    int32_t corner_width = scale_ui_value_lofi(12);
+    int32_t corner_height = scale_ui_value_lofi(12);
+    RendererClearDrawFlags(Lb_SPRITE_OUTLINE);  
+    TbDrawFlagsMask fill_flags = Lb_SPRITE_TRANSPAR8;
     if (style_type == ROUNDSLAB64K_LIGHT) {
-        RendererAddDrawFlags(Lb_SPRITE_TRANSPAR4);
-        LbDrawBox(pos_x + scale_ui_value_lofi(4), pos_y + scale_ui_value_lofi(4), width - scale_ui_value_lofi(8), height - scale_ui_value_lofi(8), 1);
-        RendererClearDrawFlags(Lb_SPRITE_TRANSPAR4);
-    } else {
-        RendererAddDrawFlags(Lb_SPRITE_TRANSPAR8);
-        LbDrawBox(pos_x + scale_ui_value_lofi(4), pos_y + scale_ui_value_lofi(4), width - scale_ui_value_lofi(8), height - scale_ui_value_lofi(8), 1);
-        RendererClearDrawFlags(Lb_SPRITE_TRANSPAR8);
+        fill_flags = Lb_SPRITE_TRANSPAR4;
+    } else if (style_type == ROUNDSLAB64K_DARKER) {
+        fill_flags = Lb_SPRITE_ALPHA_75;
     }
+    RendererAddDrawFlags(fill_flags);
+    LbDrawBox(pos_x + fill_inset, pos_y + fill_inset, width - 2 * fill_inset, height - 2 * fill_inset, fill_colour);
+    LbDrawBox(pos_x + width - fill_inset, pos_y + corner_height, fill_inset, height - 2 * corner_height, fill_colour);
+    LbDrawBox(pos_x + corner_width, pos_y + height - fill_inset, width - 2 * corner_width, fill_inset, fill_colour);
+    RendererClearDrawFlags(fill_flags);
     int x;
     int y;
     const struct TbSprite* spr = get_panel_sprite(GPS_message_frame_thin_hex_ct);
     int ps_units_per_spr = scale_ui_value_lofi(416)/spr->SWidth;
-    long i;
+    int32_t i;
     for (i = 0; i < width - scale_ui_value_lofi(68); i += scale_ui_value_lofi(26))
     {
         x = pos_x + i + scale_ui_value_lofi(34);
         y = pos_y;
         spr = get_panel_sprite(GPS_message_frame_thin_hex_ct);
-        LbSpriteDrawResized(x, y, ps_units_per_spr, spr);
+        draw_round_slab_sprite(x, y, ps_units_per_spr, spr, cmap);
         y += height - scale_ui_value_lofi(4);
         spr = get_panel_sprite(GPS_message_frame_thin_hex_cb);
-        LbSpriteDrawResized(x, y, ps_units_per_spr, spr);
+        draw_round_slab_sprite(x, y, ps_units_per_spr, spr, cmap);
     }
     for (i = 0; i < height - scale_ui_value_lofi(56); i += scale_ui_value_lofi(20))
     {
         x = pos_x;
         y = pos_y + i + scale_ui_value_lofi(28);
         spr = get_panel_sprite(GPS_message_frame_thin_hex_cr);
-        LbSpriteDrawResized(x, y, ps_units_per_spr, spr);
+        draw_round_slab_sprite(x, y, ps_units_per_spr, spr, cmap);
         x += width - scale_ui_value_lofi(4);
         spr = get_panel_sprite(GPS_message_frame_thin_hex_cl);
-        LbSpriteDrawResized(x, y, ps_units_per_spr, spr);
+        draw_round_slab_sprite(x, y, ps_units_per_spr, spr, cmap);
     }
     x = pos_x + width - scale_ui_value_lofi(34);
     y = pos_y + height - scale_ui_value_lofi(28);
     spr = get_panel_sprite(GPS_message_frame_thin_hex_tl);
-    LbSpriteDrawResized(pos_x, pos_y, ps_units_per_spr, spr);
+    draw_round_slab_sprite(pos_x, pos_y, ps_units_per_spr, spr, cmap);
     spr = get_panel_sprite(GPS_message_frame_thin_hex_tr);
-    LbSpriteDrawResized(x,     pos_y, ps_units_per_spr, spr);
+    draw_round_slab_sprite(x, pos_y, ps_units_per_spr, spr, cmap);
     spr = get_panel_sprite(GPS_message_frame_thin_hex_bl);
-    LbSpriteDrawResized(pos_x, y,     ps_units_per_spr, spr);
+    draw_round_slab_sprite(pos_x, y, ps_units_per_spr, spr, cmap);
     spr = get_panel_sprite(GPS_message_frame_thin_hex_br);
-    LbSpriteDrawResized(x,     y,     ps_units_per_spr, spr);
+    draw_round_slab_sprite(x, y, ps_units_per_spr, spr, cmap);
     RendererSetDrawFlags(drwflags_mem);
+}
+
+void draw_round_slab64k(long pos_x, long pos_y, int units_per_px, long width, long height, long style_type)
+{
+    draw_round_slab64k_remap(pos_x, pos_y, units_per_px, width, height, style_type, NULL, 1);
 }
 
 /**
@@ -538,7 +558,7 @@ void draw_button_string(struct GuiButton *gbtn, int base_width, const char *text
         }
     }
     LbTextDrawResized(w, h, tx_units_per_px, dtext);
-    LbTextSetJustifyWindow(0, 0, LbGraphicsScreenWidth());
+    LbTextSetJustifyWindow(0, 0, RendererScreenWidth());
     LbTextSetClipWindow(0/pixel_size, 0/pixel_size, MyScreenWidth/pixel_size, MyScreenHeight/pixel_size);
     LbTextSetWindow(0/pixel_size, 0/pixel_size, MyScreenWidth/pixel_size, MyScreenHeight/pixel_size);
     RendererSetDrawFlags(flgmem);
@@ -642,7 +662,7 @@ TbBool draw_text_box(const char *text)
     }
     long box_width = (108 * spritesx + 18) * units_per_pixel / 16;
     long box_height = 92 * units_per_pixel / 16;
-    long startx = (lbDisplay.PhysicalScreenWidth - box_width) / 2;
+    long startx = (RendererPhysicalWidth() - box_width) / 2;
     long starty = (lbDisplay.PhysicalScreenHeight - box_height) / 2;
     draw_message_box_at(startx, starty, box_width, box_height, spritesx, spritesy);
     // Draw the text inside box
@@ -685,7 +705,7 @@ TbBool draw_text_box_top(const char* text, ushort drawflags)
         }
     long box_width = (108 * spritesx + 18) * units_per_pixel / 16;
     long box_height = 92 * units_per_pixel / 16;
-    long startx = (lbDisplay.PhysicalScreenWidth - box_width) / 2;
+    long startx = (RendererPhysicalWidth() - box_width) / 2;
     long starty = (lbDisplay.PhysicalScreenHeight - box_height) / 2;
     draw_message_box_at(startx, starty, box_width, box_height, spritesx, spritesy);
     // Draw the text inside box
@@ -774,22 +794,22 @@ void draw_gui_panel_sprite_rmleft_player(long x, long y, int units_per_px, long 
     LbSpriteDrawResizedRemap(x, y, units_per_px, spr, &pixmap.fade_tables[remap*256]);
 }
 
-void draw_gui_panel_sprite_centered(long x, long y, int units_per_px, long spridx)
+void draw_gui_panel_sprite_centered(long x, long y, int units_per_px, long spridx, TbDrawFlagsMask draw_flags)
 {
     spridx = get_player_colored_icon_idx(spridx,my_player_number);
     const struct TbSprite* spr = get_panel_sprite(spridx);
     x -= ((spr->SWidth*units_per_px/16) >> 1);
     y -= ((spr->SHeight*units_per_px/16) >> 1);
-    LbSpriteDrawResized(x, y, units_per_px, spr);
+    UIRenderer_SubmitPanelSpriteRaw(x, y, units_per_px, spr, draw_flags);
 }
 
-void draw_gui_panel_sprite_occentered(long x, long y, int units_per_px, long spridx, TbPixel color)
+void draw_gui_panel_sprite_occentered(long x, long y, int units_per_px, long spridx, TbPixel color, TbDrawFlagsMask draw_flags)
 {
     spridx = get_player_colored_icon_idx(spridx,my_player_number);
     const struct TbSprite* spr = get_panel_sprite(spridx);
     x -= ((spr->SWidth*units_per_px/16) >> 1);
     y -= ((spr->SHeight*units_per_px/16) >> 1);
-    LbSpriteDrawResizedOneColour(x, y, units_per_px, spr, color);
+    UIRenderer_SubmitPanelSpriteRawColored(x, y, units_per_px, spr, color, draw_flags);
 }
 
 void draw_button_sprite_left(long x, long y, int units_per_px, long spridx)
@@ -827,9 +847,14 @@ TbBool frontmenu_copy_background_at(const struct TbRect *bkgnd_area, int units_p
     if (LbGraphicsScreenBPP() != 8)
         return false;
     // Do the drawing
-    copy_raw8_image_buffer(lbDisplay.WScreen,LbGraphicsScreenWidth(),LbGraphicsScreenHeight(),
-        img_width*units_per_px/16,img_height*units_per_px/16,bkgnd_area->left,bkgnd_area->top,srcbuf,img_width,img_height);
-    // Burning candle flames
+    struct RendererPresentImageDesc d = {0};
+    d.format  = PRESENT_FORMAT_INDEXED8;
+    d.palette = PRESENT_PALETTE_GAME;
+    d.kind    = PRESENT_KIND_OPAQUE;
+    d.dst_w = img_width*units_per_px/16; d.dst_h = img_height*units_per_px/16;
+    d.dst_x = bkgnd_area->left;          d.dst_y = bkgnd_area->top;
+    d.src   = srcbuf; d.src_w = img_width; d.src_h = img_height;
+    RendererPresentImage(&d);
     return true;
 }
 

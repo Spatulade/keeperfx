@@ -95,6 +95,7 @@ struct MapLevelInfo map_info;
 TbBool MinimalResolutionSetup;
 
 struct TbColorTables pixmap;
+TbBool fade_tables_ready = 0;
 struct TbAlphaTables alpha_sprite_table;
 unsigned char white_pal[256];
 unsigned char red_pal[256];
@@ -128,6 +129,9 @@ short LoadVRes256Data(long scrbuf_size)
     if (!winfont || !font_sprites || !button_sprites || !gui_panel_sprites || LbDataLoadAll(gui_load_files_640)) {
         return 0;
     }
+    // gui_slab was just (re)loaded by the LbDataLoadAll() call above --
+    // notify the active renderer so GL can (re)upload its cached slab texture.
+    RendererUpdateSlabTexture(gui_slab, GUI_SLAB_DIMENSION);
     return 1;
 }
 
@@ -138,11 +142,16 @@ void FreeVRes256Data(void)
     free_spritesheet(&button_sprites);
     free_spritesheet(&gui_panel_sprites);
     LbDataFreeAll(gui_load_files_640);
+    LbTextInvalidateFontGeneration();
 }
 
 short LoadVResMinimal(void)
 {
     button_sprites = load_spritesheet("data/gui1-32.dat", "data/gui1-32.tab");
+    // Land View runs with the minimal front-end resource set, but its standalone
+    // information box recreates the normal in-game panel and therefore needs the
+    // high-resolution GUI2 art instead of the reduced gui2-32 sheet.
+    gui_panel_sprites = load_spritesheet("data/gui2-64.dat", "data/gui2-64.tab");
 #ifdef SPRITE_FORMAT_V2
     frontend_font[0] = load_font("ldata/frontft1-64.dat", "ldata/frontft1-64.tab");
     frontend_font[1] = load_font("ldata/frontft2-64.dat", "ldata/frontft2-64.tab");
@@ -154,7 +163,7 @@ short LoadVResMinimal(void)
     frontend_font[2] = load_font("ldata/frontft3.dat", "ldata/frontft3.tab");
     frontend_font[3] = load_font("ldata/frontft4.dat", "ldata/frontft4.tab");
 #endif
-    return button_sprites && frontend_font[0] && frontend_font[1] && frontend_font[2] &&
+    return button_sprites && gui_panel_sprites && frontend_font[0] && frontend_font[1] && frontend_font[2] &&
         frontend_font[3] && LbDataLoadAll(front_load_files_minimal_640) == 0;
 }
 
@@ -164,7 +173,9 @@ void FreeVResMinimal(void)
         free_font(&frontend_font[i]);
     }
     free_spritesheet(&button_sprites);
+    free_spritesheet(&gui_panel_sprites);
     LbDataFreeAll(front_load_files_minimal_640);
+    LbTextInvalidateFontGeneration();
 }
 
 /**
@@ -200,6 +211,9 @@ short LoadMcgaData(void)
   winfont = load_font("data/font2-32.dat", "data/font2-32.tab");
   font_sprites = load_font("data/font1-32.dat", "data/font1-32.tab");
   gui_panel_sprites = load_spritesheet("data/gui2-32.dat", "data/gui2-32.tab");
+  // gui_slab was just (re)loaded by the LbDataLoad() loop above --
+  // notify the active renderer so GL can (re)upload its cached slab texture.
+  RendererUpdateSlabTexture(gui_slab, GUI_SLAB_DIMENSION);
   return button_sprites && winfont && font_sprites && gui_panel_sprites && (ferror == 0);
 }
 
@@ -210,6 +224,7 @@ void FreeMcgaData(void)
     free_font(&font_sprites);
     free_spritesheet(&button_sprites);
     free_spritesheet(&gui_panel_sprites);
+    LbTextInvalidateFontGeneration();
 }
 
 void set_game_vidmode(uint i, TbScreenMode nmode)
@@ -518,6 +533,7 @@ TbBool init_fades_table(void)
     for (int i = 0; i < 256; i++) {
         pixmap.map_abyss[i] = abyss_colours[pixmap.ghost[i] * 3 >> 8];
     }
+    fade_tables_ready = 1;
     return true;
 }
 
@@ -632,12 +648,11 @@ TbScreenMode setup_screen_mode(TbScreenMode nmode, TbBool failsafe)
       return nmode;
     }
   }
-  TbBool hi_res = ((LbGraphicsScreenHeight() < 400) ? false : true);
-  long lens_mem = game.applied_lens_type;
+  TbBool hi_res = ((RendererScreenHeight() < 400) ? false : true);
   unsigned int flg_mem = RendererGetDrawFlags();
   TbBool was_minimal_res = (MinimalResolutionSetup || force_video_mode_reset);
   set_pointer_graphic_none();
-  if (LbGraphicsScreenHeight() < 200)
+  if (RendererScreenHeight() < 200)
   {
       WARNLOG("Unhandled previous Screen Mode %d, Reset skipped",(int)old_mode);
   } else
@@ -646,6 +661,12 @@ TbScreenMode setup_screen_mode(TbScreenMode nmode, TbBool failsafe)
     {
       reset_eye_lenses();
       reset_heap_manager();
+      // GL's keeper-sprite atlas caches by draw_idx, stable only within one
+      // sprite-heap generation -- clear it in lockstep with the heap reset
+      // above (main_game.c's init_level() covers the level-load
+      // case, this covers the video-mode-switch case). No-op on software /
+      // before GL is active.
+      RendererClearKeeperSpriteAtlas();
       unload_pointer_file(hi_res);
     }
     if (nmode != old_mode)
@@ -707,7 +728,6 @@ TbScreenMode setup_screen_mode(TbScreenMode nmode, TbBool failsafe)
   update_screen_mode_data(new_mdinfo->Width, new_mdinfo->Height);
   if (parchment_loaded)
     reload_parchment_file(hi_res);
-  reinitialise_eye_lens(lens_mem);
   RendererSetDrawFlags(flg_mem);
   setup_heap_manager();
   force_video_mode_reset = false;
@@ -804,9 +824,9 @@ TbScreenMode setup_screen_mode_minimal(TbScreenMode nmode)
       return nmode;
     }
   }
-  TbBool hi_res = ((LbGraphicsScreenHeight() < 400) ? false : true);
+  TbBool hi_res = ((RendererScreenHeight() < 400) ? false : true);
   ushort flg_mem = RendererGetDrawFlags();
-  if (LbGraphicsScreenHeight() < 200)
+  if (RendererScreenHeight() < 200)
   {
     WARNLOG("Unhandled previous Screen Mode %d, Reset skipped",(int)old_mode);
   } else
@@ -815,6 +835,8 @@ TbScreenMode setup_screen_mode_minimal(TbScreenMode nmode)
     {
       reset_eye_lenses();
       reset_heap_manager();
+      // See setup_screen_mode()'s identical comment above.
+      RendererClearKeeperSpriteAtlas();
     }
     if ((!MinimalResolutionSetup && !hi_res) || (MinimalResolutionSetup && hi_res))
       unload_pointer_file(hi_res);
@@ -1007,7 +1029,7 @@ TbBool switch_to_next_video_mode(void)
   return true;
 }
 
-/** Needed until its contents are refactored, then we can just call switch_to_next_video_mode from PckA_SwitchScrnRes. */
+/** Needed until its contents are refactored, then callers can just call switch_to_next_video_mode. */
 void switch_to_next_video_mode_wrapper(void)
 {
   char percent_x = ((float)lbDisplay.MMouseX / (float)(lbDisplay.MouseWindowX + lbDisplay.MouseWindowWidth)) * 100;

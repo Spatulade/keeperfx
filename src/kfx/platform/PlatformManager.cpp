@@ -13,6 +13,7 @@
 #include "kfx/platform/PlatformWindows.h"
 #include "kfx/platform/PlatformLinux.h"
 #include "kfx/platform/FileFind.h"
+#include "kfx/platform/FileSystemLb.h"
 #include "platform.h"
 #include "bflib_fileio.h"
 #include "cdrom.h"
@@ -22,6 +23,12 @@
 /******************************************************************************/
 
 IWindowSystem* IPlatform::GetWindowSystem() { return GetSDLWindowSystem(); }
+
+IFileSystem* IPlatform::GetFileSystem()
+{
+    static FileSystemLb s_fs;
+    return &s_fs;
+}
 
 IPlatform* GetPlatform()
 {
@@ -39,6 +46,8 @@ extern "C" const char * PlatformManager_GetOSVersion(void)   { return GetPlatfor
 extern "C" const void * PlatformManager_GetImageBase(void)   { return GetPlatform()->GetImageBase(); }
 extern "C" const char * PlatformManager_GetWineVersion(void) { return GetPlatform()->GetWineVersion(); }
 extern "C" const char * PlatformManager_GetWineHost(void)    { return GetPlatform()->GetWineHost(); }
+extern "C" const char * PlatformManager_GetUserPrefDir(void) { return GetPlatform()->GetUserPrefDir(); }
+extern "C" size_t       PlatformManager_GetScratchSize(void) { return GetPlatform()->GetScratchSize(); }
 
 /******************************************************************************/
 
@@ -181,10 +190,28 @@ extern "C" void PlatformManager_SetWindowPosition(int x, int y)
     if (ws) ws->SetWindowPosition(x, y);
 }
 
+extern "C" void PlatformManager_SetWindowTitle(const char* title)
+{
+    IWindowSystem* ws = GetSDLWindowSystem();
+    if (ws) ws->SetWindowTitle(title);
+}   
+
 extern "C" int PlatformManager_CreateWindow(const char* title, int x, int y, int w, int h, unsigned int flags)
 {
     IWindowSystem* ws = GetSDLWindowSystem();
     return (ws && ws->CreateWindow(title, x, y, w, h, flags)) ? 1 : 0;
+}
+
+extern "C" void PlatformManager_SetGameSurfaceSize(int w, int h)
+{
+    IWindowSystem* ws = GetSDLWindowSystem();
+    if (ws) ws->SetGameSurfaceSize(w, h);
+}
+
+extern "C" int PlatformManager_GetCursorPosition(int* x, int* y)
+{
+    IWindowSystem* ws = GetSDLWindowSystem();
+    return (ws && ws->GetCursorPosition(x, y)) ? 1 : 0;
 }
 
 extern "C" void PlatformManager_WarpCursor(int x, int y)
@@ -197,12 +224,6 @@ extern "C" int PlatformManager_IsCursorInWindow(void)
 {
     IWindowSystem* ws = GetSDLWindowSystem();
     return (ws && ws->IsCursorInWindow()) ? 1 : 0;
-}
-
-extern "C" int PlatformManager_RecreateWindowForSoftwareRenderer(void)
-{
-    IWindowSystem* ws = GetSDLWindowSystem();
-    return (ws && ws->RecreateForSoftwareRenderer()) ? 1 : 0;
 }
 
 extern "C" int PlatformManager_GetDisplayRefreshRate(void)
