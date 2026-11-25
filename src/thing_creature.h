@@ -87,6 +87,7 @@ TbBool update_controlled_creature_movement(const struct Thing *thing, struct Cre
 void slow_down_controlled_creature(struct CreatureControl *cctrl);
 struct Thing* kill_creature(struct Thing *creatng, struct Thing *killertng,
     PlayerNumber killer_plyr_idx, CrDeathFlags flags);
+TbBool creature_counts_in_dungeon_stats(const struct Thing *creatng);
 void update_creature_count(struct Thing *thing);
 TngUpdateRet process_creature_state(struct Thing *thing);
 
@@ -107,7 +108,7 @@ ThingIndex process_player_use_instance(struct Thing *thing, CrInstance inst_id, 
 ThingIndex get_human_controlled_creature_target(struct Thing *thing, CrInstance inst_id, const struct Packet *packet);
 ThingIndex find_possession_target(struct Thing *caster, CrInstance inst_id, int32_t yaw);
 TbBool possession_instance_can_start(struct Thing *thing, const struct CreatureControl *cctrl, CrInstance inst_id, GameTurn turn, const struct Packet *pckt, TbBool allow_unavailable);
-struct Thing *get_creature_near_for_controlling(PlayerNumber plyr_idx, MapCoord x, MapCoord y);
+struct Thing *get_creature_near_for_controlling(PlayerNumber plyr_idx, NetUserId user, MapCoord x, MapCoord y);
 
 TbBool load_swipe_graphic_for_creature(const struct Thing *thing);
 void free_swipe_graphic(void);
@@ -257,6 +258,7 @@ void throw_out_gold(struct Thing* thing, long amount);
 ThingModel get_random_creature_kind_with_model_flags(unsigned long model_flags);
 ThingModel get_random_appropriate_creature_kind(ThingModel original_model);
 struct Thing *grow_up_creature(struct Thing *thing, ThingModel grow_up_model, CrtrExpLevel grow_up_level);
+unsigned char path_tileset_id(struct Thing *thing);
 /******************************************************************************/
 #ifdef __cplusplus
 }

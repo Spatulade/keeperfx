@@ -49,6 +49,7 @@
 #include "frontmenu_ingame_tabs.h"
 #include "room_treasure.h"
 #include "net_game.h"
+#include "power_hand.h"
 #include "post_inc.h"
 
 extern void clear_input(struct Packet* packet);
@@ -294,7 +295,7 @@ TbBool packets_process_cheats(
             {
                 pwkind = ustate->chosen_power_kind;
                 i = get_power_overcharge_level(ustate);
-                magic_use_power_direct(plyr_idx,pwkind,i,stl_x, stl_y,INVALID_THING, PwMod_CastForFree);
+                magic_use_power_direct(plyr_idx,user,pwkind,i,stl_x, stl_y,INVALID_THING, PwMod_CastForFree);
                 unset_packet_control(pckt, PCtr_LBtnRelease);
             }
             break;
@@ -312,7 +313,7 @@ TbBool packets_process_cheats(
             if ((pckt->control_flags & PCtr_LBtnRelease) != 0)
             {
                 KeepPwrLevel power_level = get_power_overcharge_level(ustate);
-                magic_use_power_direct(plyr_idx,pwkind,power_level,stl_x,stl_y,thing,PwMod_CastForFree);
+                magic_use_power_direct(plyr_idx,user,pwkind,power_level,stl_x,stl_y,thing,PwMod_CastForFree);
                 unset_packet_control(pckt, PCtr_LBtnRelease);
             }
             break;
@@ -585,7 +586,7 @@ TbBool packets_process_cheats(
                     set_user_instance(user, PI_UnqueryCrtr, 0);
                     unset_packet_control(pckt, PCtr_RBtnRelease);
                 } else
-                if (creature_is_dying(thing))
+                if (creature_is_dying(thing) || thing_held_by_other_user(user, thing)) // e.g. a co-user picked it up
                 {
                     set_user_instance(user, PI_UnqueryCrtr, 0);
                     if (is_local_user(user))

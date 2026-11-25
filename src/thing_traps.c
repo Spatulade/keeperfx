@@ -593,7 +593,7 @@ struct Thing *activate_trap_spawn_creature(struct Thing *traptng, unsigned char 
 void activate_trap_god_spell(struct Thing *traptng, struct Thing *creatng, PowerKind pwkind)
 {
     struct TrapConfigStats *trapst = get_trap_model_stats(traptng->model);
-    magic_use_power_direct(traptng->owner, pwkind, trapst->activation_level, creatng->mappos.x.stl.num, creatng->mappos.y.stl.num, creatng, PwMod_CastForFree);
+    magic_use_power_direct(traptng->owner, NO_USER,pwkind, trapst->activation_level, creatng->mappos.x.stl.num, creatng->mappos.y.stl.num, creatng, PwMod_CastForFree);
 }
 
 TbBool activate_trap_lua(struct Thing *traptng, struct Thing *creatng, FuncIdx func_idx)
@@ -1397,11 +1397,11 @@ void script_place_trap(PlayerNumber plyridx, ThingModel trapkind, MapSubtlCoord 
     {
         if (free)
         {
-            player_place_trap_without_check_at(stl_x, stl_y, plyridx, trapkind, free);
+            player_place_trap_without_check_at(stl_x, stl_y, plyridx, NO_USER, trapkind, free);
         }
         else
         {
-            player_place_trap_at(stl_x, stl_y, plyridx, trapkind);
+            player_place_trap_at(stl_x, stl_y, plyridx, NO_USER, trapkind);
         }
     }
 }

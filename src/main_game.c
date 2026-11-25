@@ -50,6 +50,7 @@
 #include "net_spectator.h"
 #include "observer.h"
 #include "frontmenu_ingame_evnt.h"
+#include "net_filecheck.h"
 #include "net_resync.h"
 #include "room_library.h"
 #include "room_list.h"
@@ -194,6 +195,8 @@ static TbBool init_level(void)
 
     recheck_all_mod_exist();
 
+    reset_loaded_file_checksums();
+    add_loaded_file_checksum(prepare_file_path(campaign.fgroup, campaign.fname));
     luascript_loaded = open_lua_script(get_selected_level_number());
     // Restore campaign-layer sounds before creature configs load, so creature cfg custom
     // sounds are added to the already-restored bank (not wiped afterwards).
@@ -202,6 +205,8 @@ static TbBool init_level(void)
     level_load_time_phase(LevelLoadTime_Sprites);
     init_custom_sprites(get_selected_level_number());
     level_load_time_phase(LevelLoadTime_Configs);
+    // Map sounds must exist before tileset.toml reads FootstepSound.
+    load_level_sounds_config(get_level_fgroup(get_selected_level_number()), get_selected_level_number());
     load_stats_files();
     level_load_time_phase(LevelLoadTime_GameSetup);
     check_and_auto_fix_stats();
@@ -301,6 +306,7 @@ static void post_init_level(void)
     clear_creature_pool();
     setup_computer_players2();
     load_script(get_loaded_level_number());
+    texture_sets_load_for_level();
     lua_on_game_start();
     init_dungeons_research();
     init_dungeons_essential_position();

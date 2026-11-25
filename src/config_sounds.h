@@ -162,12 +162,8 @@ extern int            snd_dig_impact_count;
 extern SoundSmplTblID snd_dig_dirt;
 
 /* Footstep variants */
-extern SoundSmplTblID snd_foot_spur;
-extern int            snd_foot_spur_count;
 extern SoundSmplTblID snd_foot_wet;
 extern int            snd_foot_wet_count;
-extern SoundSmplTblID snd_foot_snow;
-extern int            snd_foot_snow_count;
 
 /* Creature ambient */
 extern SoundSmplTblID snd_insect_fly;       /* diptera/insect flying buzz */
@@ -181,6 +177,8 @@ extern SoundSmplTblID snd_strike_wall;
 extern int            snd_strike_wall_count;
 extern SoundSmplTblID snd_reinforce_hit;    /* imp wall reinforcement impact */
 extern int            snd_reinforce_hit_count;
+extern SoundSmplTblID snd_steal_room_hit;   /* imp room steal impact */
+extern int            snd_steal_room_hit_count;
 
 /* Spells */
 extern SoundSmplTblID snd_spell_wall;
@@ -327,6 +325,19 @@ extern int g_speech_queue_limit;
  * @return Sample ID, or 0 if unresolvable
  */
 int sound_id_from_text(const char* text);
+
+/**
+ * @brief Resolve a sound name or file path to a sample ID, loading several numbered files if asked.
+ *
+ * A registered name resolves as usual. A file path with count > 1 loads count files whose
+ * trailing number increments (water1.ogg, water2.ogg, ...) at consecutive IDs.
+ * Each distinct file and count pair is loaded once and cached.
+ *
+ * @param text Sound name or file path string
+ * @param count Number of numbered files to load for a file path; 1 loads the file itself
+ * @return ID of the first sample, or 0 if unresolvable
+ */
+int sound_id_from_text_count(const char* text, int count);
 
 /**
  * @brief NamedField parse function that resolves a sound name, numeric ID, or inline file path.

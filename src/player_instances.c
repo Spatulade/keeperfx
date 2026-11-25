@@ -53,6 +53,7 @@
 #include "engine_arrays.h"
 #include "engine_camera.h"
 #include "local_camera.h"
+#include "local_hand.h"
 #include "engine_redraw.h"
 #include "sounds.h"
 #include "config_settings.h"
@@ -74,13 +75,11 @@
 extern "C" {
 #endif
 /******************************************************************************/
-int32_t pinstfs_hand_grab(NetUserId user, int32_t *n);
+int32_t pinstfs_hand_animation(NetUserId user, int32_t *n);
 int32_t pinstfe_hand_grab(NetUserId user, int32_t *n);
 int32_t pinstfs_hand_drop(NetUserId user, int32_t *n);
 int32_t pinstfe_hand_drop(NetUserId user, int32_t *n);
-int32_t pinstfs_hand_whip(NetUserId user, int32_t *n);
 int32_t pinstfe_hand_whip(NetUserId user, int32_t *n);
-int32_t pinstfs_hand_whip_end(NetUserId user, int32_t *n);
 int32_t pinstfe_hand_whip_end(NetUserId user, int32_t *n);
 int32_t pinstfs_direct_control_creature(NetUserId user, int32_t *n);
 int32_t pinstfs_passenger_control_creature(NetUserId user, int32_t *n);
@@ -107,10 +106,10 @@ int32_t pinstfe_zoom_to_position(NetUserId user, int32_t *n);
 
 struct PlayerInstanceInfo player_instance_info[PLAYER_INSTANCES_COUNT] = {
   { 0, 0, NULL,                                 NULL,                           NULL,                                {0}, {0}, 0, 0}, // PI_Unset
-  { 3, 1, pinstfs_hand_grab,                    NULL,                           pinstfe_hand_grab,                   {0}, {0}, 0, 0}, // PI_Grab
+  { 3, 1, pinstfs_hand_animation,               NULL,                           pinstfe_hand_grab,                   {0}, {0}, 0, 0}, // PI_Grab
   { 3, 1, pinstfs_hand_drop,                    NULL,                           pinstfe_hand_drop,                   {0}, {0}, 0, 0}, // PI_Drop
-  { 4, 0, pinstfs_hand_whip,                    NULL,                           pinstfe_hand_whip,                   {0}, {0}, 0, 0}, // PI_Whip
-  { 5, 0, pinstfs_hand_whip_end,                NULL,                           pinstfe_hand_whip_end,               {0}, {0}, 0, 0}, // PI_WhipEnd
+  { 4, 0, pinstfs_hand_animation,               NULL,                           pinstfe_hand_whip,                   {0}, {0}, 0, 0}, // PI_Whip
+  { 5, 0, pinstfs_hand_animation,               NULL,                           pinstfe_hand_whip_end,               {0}, {0}, 0, 0}, // PI_WhipEnd
   {12, 1, pinstfs_direct_control_creature,      pinstfm_control_creature,       pinstfe_direct_control_creature,     {0}, {0}, 0, 0}, // PI_DirctCtrl
   {12, 1, pinstfs_passenger_control_creature,   pinstfm_control_creature,       pinstfe_passenger_control_creature,  {0}, {0}, 0, 0}, // PI_PsngrCtrl
   {12, 1, pinstfs_direct_leave_creature,        pinstfm_leave_creature,         pinstfe_leave_creature,              {0}, {0}, 0, 0}, // PI_DirctCtLeave
@@ -217,13 +216,38 @@ TbBool player_instance_controls_camera(unsigned char inum)
     }
 }
 
-int32_t pinstfs_hand_grab(NetUserId user, int32_t *n)
+int32_t get_hand_instance_animation(unsigned char inum)
+{
+    switch (inum) {
+    case PI_Grab:
+    case PI_Drop:
+        return HndA_Pickup;
+    case PI_Whip:
+        return HndA_Slap;
+    case PI_WhipEnd:
+        return HndA_SideSlap;
+    default:
+        return HndA_None;
+    }
+}
+
+int32_t get_hand_instance_end_animation(unsigned char inum)
+{
+    switch (inum) {
+    case PI_Drop:
+        return HndA_Hover;
+    case PI_WhipEnd:
+        return HndA_SideHover;
+    default:
+        return HndA_None;
+    }
+}
+
+int32_t pinstfs_hand_animation(NetUserId user, int32_t *n)
 {
     struct UserState* ustate = get_user_state(user);
-    struct Thing* thing = thing_get(ustate->hand_thing_idx);
-    if (!thing_is_invalid(thing))
-    {
-        set_power_hand_graphic(user, HndA_Pickup);
+    if (thing_exists(thing_get(ustate->hand_thing_idx))) {
+        set_power_hand_graphic(user, get_hand_instance_animation(ustate->instance_num));
     }
     return 0;
 }
@@ -242,7 +266,7 @@ int32_t pinstfe_hand_grab(NetUserId user, int32_t *n)
     }
     ustate->influenced_thing_creation = 0;
     ustate->influenced_thing_idx = 0;
-    if (magic_use_available_power_on_thing(player->id_number, PwrK_HAND, 0,dsttng->mappos.x.stl.num, dsttng->mappos.y.stl.num, dsttng, PwMod_Default) == Lb_FAIL) {
+    if (magic_use_available_power_on_thing(player->id_number, user, PwrK_HAND, 0,dsttng->mappos.x.stl.num, dsttng->mappos.y.stl.num, dsttng, PwMod_Default) == Lb_FAIL) {
         WARNLOG("Cannot pick up %s index %d",thing_model_name(dsttng),(int)dsttng->index);
         return 0;
     }
@@ -251,17 +275,10 @@ int32_t pinstfe_hand_grab(NetUserId user, int32_t *n)
 
 int32_t pinstfs_hand_drop(NetUserId user, int32_t *n)
 {
-    struct PlayerInfo *player = get_user_player(user);
     struct UserState* ustate = get_user_state(user);
-    struct Dungeon* dungeon = get_players_dungeon(player);
-    struct Thing* thing = thing_get(ustate->hand_thing_idx);
-    ustate->influenced_thing_idx = dungeon->things_in_hand[0];
-    ustate->influenced_thing_creation = thing->creation_turn;
-    if (thing_exists(thing))
-    {
-        set_power_hand_graphic(user, HndA_Pickup);
-    }
-    return 0;
+    ustate->influenced_thing_idx = ustate->things_in_hand[0];
+    ustate->influenced_thing_creation = thing_get(ustate->things_in_hand[0])->creation_turn;
+    return pinstfs_hand_animation(user, n);
 }
 
 int32_t pinstfe_hand_drop(NetUserId user, int32_t *n)
@@ -270,27 +287,34 @@ int32_t pinstfe_hand_drop(NetUserId user, int32_t *n)
     struct Thing* thing = thing_get(ustate->hand_thing_idx);
     if (thing_exists(thing))
     {
-        set_power_hand_graphic(user, HndA_Hover);
+        set_power_hand_graphic(user, get_hand_instance_end_animation(PI_Drop));
     }
     ustate->influenced_thing_idx = 0;
     ustate->influenced_thing_creation = 0;
     return 0;
 }
 
-int32_t pinstfs_hand_whip(NetUserId user, int32_t *n)
+void show_power_slap_feedback(struct Thing *thing)
 {
-    struct UserState* ustate = get_user_state(user);
-    struct Thing* thing = thing_get(ustate->hand_thing_idx);
-    if (thing_exists(thing))
-    {
-        set_power_hand_graphic(user, HndA_Slap);
+    struct PowerConfigStats *powerst = get_power_model_stats(PwrK_SLAP);
+    if (thing_is_object(thing)) {
+        struct Thing *efftng = create_effect(&thing->mappos, TngEff_Dummy, thing->owner);
+        if (!thing_is_invalid(efftng)) {
+            thing_play_sample(efftng, powerst->select_sound_idx, NORMAL_PITCH, 0, 3, 0, 3, FULL_LOUDNESS);
+        }
+        return;
     }
-    return 0;
+    if (creature_model_bleeds(thing->model)) {
+        struct Coord3d pos = thing->mappos;
+        pos.z.val += thing->clipbox_size_z >> 1;
+        create_effect(&pos, TngEff_HitBleedingUnit, thing->owner);
+    }
+    play_creature_sound(thing, CrSnd_Slap, 3, 0);
+    thing_play_sample(thing, powerst->select_sound_idx, NORMAL_PITCH, 0, 3, 0, 3, FULL_LOUDNESS);
 }
 
 TbBool slap_thing(struct PlayerInfo *player, NetUserId user, struct Thing *thing)
 {
-    struct PowerConfigStats* powerst = get_power_model_stats(PwrK_SLAP);
     struct TrapConfigStats *trapst;
     struct ShotConfigStats* shotst;
     if (!thing_exists(thing) || !thing_slappable(thing, player->id_number))
@@ -299,19 +323,17 @@ TbBool slap_thing(struct PlayerInfo *player, NetUserId user, struct Thing *thing
   {
   case TCls_Creature:
   {
-      struct Coord3d pos;
       if (creature_under_spell_effect(thing, CSAfF_Freeze))
       {
           kill_creature(thing, INVALID_THING, thing->owner, CrDed_Default);
       } else
       {
           slap_creature(player, thing);
-          pos.x.val = thing->mappos.x.val;
-          pos.y.val = thing->mappos.y.val;
-          pos.z.val = thing->mappos.z.val + (thing->clipbox_size_z >> 1);
-          if ( creature_model_bleeds(thing->model) )
-              create_effect(&pos, TngEff_HitBleedingUnit, thing->owner);
-          thing_play_sample(thing, powerst->select_sound_idx, NORMAL_PITCH, 0, 3, 0, 3, FULL_LOUDNESS);
+          if (local_hand_takes_over_action(user, LocalHandAction_Slap)) {
+              local_hand_hide_damage_flash(thing);
+          } else {
+              show_power_slap_feedback(thing);
+          }
           thing->veloc_base.x.val += distance_with_angle_to_coord_x(64, get_user_dungeon_yaw(user));
           thing->veloc_base.y.val += distance_with_angle_to_coord_y(64, get_user_dungeon_yaw(user));
       }
@@ -351,17 +373,13 @@ TbBool slap_thing(struct PlayerInfo *player, NetUserId user, struct Thing *thing
       }
       break;
       case TCls_Object:
-      {
-          struct Thing* efftng;
-          if (object_is_slappable_by_player(thing, player->id_number))
-          {
-            efftng = create_effect(&thing->mappos, TngEff_Dummy, thing->owner);
-            if (!thing_is_invalid(efftng))
-              thing_play_sample(efftng, powerst->select_sound_idx, NORMAL_PITCH, 0, 3, 0, 3, FULL_LOUDNESS);
-            slap_object(thing);
+          if (object_is_slappable_by_player(thing, player->id_number)) {
+              if (!local_hand_takes_over_action(user, LocalHandAction_Slap)) {
+                  show_power_slap_feedback(thing);
+              }
+              slap_object(thing);
           }
           break;
-      }
   }
   return true;
 }
@@ -380,31 +398,19 @@ int32_t pinstfe_hand_whip(NetUserId user, int32_t *n)
     return 0;
 }
 
-int32_t pinstfs_hand_whip_end(NetUserId user, int32_t *n)
-{
-    struct UserState* ustate = get_user_state(user);
-    struct Thing* thing = thing_get(ustate->hand_thing_idx);
-    if (thing_exists(thing))
-    {
-        set_power_hand_graphic(user, HndA_SideSlap);
-    }
-    return 0;
-}
-
 int32_t pinstfe_hand_whip_end(NetUserId user, int32_t *n)
 {
     struct UserState* ustate = get_user_state(user);
     struct Thing* thing = thing_get(ustate->hand_thing_idx);
     if (thing_exists(thing))
     {
-        set_power_hand_graphic(user, HndA_SideHover);
+        set_power_hand_graphic(user, get_hand_instance_end_animation(PI_WhipEnd));
     }
     return 0;
 }
 
 int32_t pinstfs_passenger_control_creature(NetUserId user, int32_t *n)
 {
-    struct PlayerInfo *player = get_user_player(user);
     struct UserState *ustate = get_user_state(user);
     ustate->init_flags |= UsrIF_MouseInputDisabled;
     turn_user_cursor_light(user, false);
@@ -425,7 +431,7 @@ int32_t pinstfs_passenger_control_creature(NetUserId user, int32_t *n)
           ustate->dungeon_camera.y = thing->mappos.y.val;
     }
     // Play possession sound
-    play_player_sample(player->id_number, get_power_model_stats(PwrK_POSSESS)->select_sound_idx);
+    play_user_sample(user, get_power_model_stats(PwrK_POSSESS)->select_sound_idx);
     return 0;
 }
 
@@ -457,6 +463,7 @@ int32_t pinstfm_control_creature(NetUserId user, int32_t *n)
         ustate->init_flags &= ~UsrIF_KeyboardInputDisabled;
         ustate->init_flags &= ~UsrIF_MouseInputDisabled;
         set_user_instance(user, PI_Unset, true);
+        set_local_camera_destination(user);
         return 0;
     }
     if (ustate->prefs[UPref_FrontView] == 0)
@@ -482,6 +489,7 @@ int32_t pinstfe_direct_control_creature(NetUserId user, int32_t *n)
         }
         ustate->init_flags &= ~UsrIF_KeyboardInputDisabled;
         ustate->init_flags &= ~UsrIF_MouseInputDisabled;
+        set_local_camera_destination(user);
         return 0;
     }
     set_user_instance(user, PI_CrCtrlFade, false);
@@ -650,7 +658,8 @@ int32_t pinstfs_zoom_to_heart(NetUserId user, int32_t *n)
         cctrl->creature_control_flags |= CCFlg_NoCompControl;
         ustate->init_flags |= UsrIF_KeyboardInputDisabled;
         ustate->init_flags |= UsrIF_MouseInputDisabled;
-        game.view_mode_flags |= GNFldD_CreaturePasngr;
+        if (is_local_user(user))
+            game.view_mode_flags |= GNFldD_CreaturePasngr;
     }
     return 0;
 }
@@ -739,7 +748,8 @@ int32_t pinstfe_zoom_out_of_heart(NetUserId user, int32_t *n)
   turn_user_cursor_light(user, true);
   ustate->init_flags &= ~UsrIF_KeyboardInputDisabled;
   ustate->init_flags &= ~UsrIF_MouseInputDisabled;
-  game.view_mode_flags &= ~GNFldD_CreaturePasngr;
+  if (is_local_user(user))
+      game.view_mode_flags &= ~GNFldD_CreaturePasngr;
   if (user == get_displayed_user()) {
     LbPaletteStopOpenFade();
     PaletteSetPlayerPalette(player,engine_palette);
@@ -831,26 +841,37 @@ int32_t pinstfe_zoom_to_position(NetUserId user, int32_t *n)
     return 0;
 }
 
+TbBool begin_user_instance(struct UserState *ustate, int32_t ninum, TbBool force)
+{
+    int32_t inum = ustate->instance_num;
+    if (inum >= PLAYER_INSTANCES_COUNT) {
+        inum = 0;
+    }
+    if ((inum != 0) && (player_instance_info[inum].instance_state == 1) && !force) {
+        return false;
+    }
+    ustate->instance_num = ninum % PLAYER_INSTANCES_COUNT;
+    ustate->instance_remain_turns = player_instance_info[ustate->instance_num].length_turns;
+    return true;
+}
+
 void set_user_instance(NetUserId user, int32_t ninum, TbBool force)
 {
     struct UserState *ustate = get_user_state(user);
-    if (user_state_invalid(ustate))
+    if (user_state_invalid(ustate)) {
         return;
-    int32_t inum = ustate->instance_num;
-    if (inum >= PLAYER_INSTANCES_COUNT)
-        inum = 0;
-    if (inum == 0 || player_instance_info[inum].instance_state != 1 || force) {
-        if (user == OBSERVER_USER && ninum == PI_ZoomToPos) {
-            observer_camera_jump(coord_subtile(ustate->zoom_to_pos_x), coord_subtile(ustate->zoom_to_pos_y));
-            return;
-        }
-        ustate->instance_num = ninum%PLAYER_INSTANCES_COUNT;
-        struct PlayerInstanceInfo* inst_info = &player_instance_info[ustate->instance_num];
-        ustate->instance_remain_turns = inst_info->length_turns;
-        InstncInfo_Func callback = inst_info->start_cb;
-        if (callback != NULL) {
-            callback(user, &inst_info->start_callback_parameters[0]);
-        }
+    }
+    if ((user == OBSERVER_USER) && (ninum == PI_ZoomToPos)) {
+        observer_camera_jump(coord_subtile(ustate->zoom_to_pos_x), coord_subtile(ustate->zoom_to_pos_y));
+        return;
+    }
+    if (!begin_user_instance(ustate, ninum, force)) {
+        return;
+    }
+    struct PlayerInstanceInfo* inst_info = &player_instance_info[ustate->instance_num];
+    InstncInfo_Func callback = inst_info->start_cb;
+    if (callback != NULL) {
+        callback(user, &inst_info->start_callback_parameters[0]);
     }
 }
 
@@ -903,7 +924,7 @@ void leave_creature_as_controller(NetUserId user, struct Thing *thing)
     {
         set_user_instance(user, PI_Unset, false);
         set_user_view_type(user, PVT_DungeonTop);
-        set_player_lens(player->id_number, 0);
+        set_user_lens(user, 0);
         ustate->init_flags &= ~UsrIF_CreaturePassengerMode;
         update_local_view(user, false);
         ustate->dungeon_camera.x = subtile_coord_center(game.map_subtiles_x/2);
@@ -914,7 +935,7 @@ void leave_creature_as_controller(NetUserId user, struct Thing *thing)
     }
     clear_selected_thing(ustate);
     set_user_view_type(user, PVT_DungeonTop);
-    set_player_lens(player->id_number, 0);
+    set_user_lens(user, 0);
     thing->alloc_flags &= ~TAlF_IsControlled;
     thing->rendering_flags &= ~TRF_Invisible;
     ustate->init_flags &= ~UsrIF_CreaturePassengerMode;
@@ -928,7 +949,10 @@ void leave_creature_as_controller(NetUserId user, struct Thing *thing)
     sync_local_camera(user);
     if (thing->class_id == TCls_Creature)
     {
-        set_start_state(thing);
+        // A creature carried by a co-user stays in their hand
+        if (!thing_is_picked_up(thing)) {
+            set_start_state(thing);
+        }
         cctrl->max_speed = calculate_correct_creature_maxspeed(thing);
         if ((cctrl->creature_state_flags & TF2_Spectator) != 0) {
           delete_thing_structure(thing, 0);
@@ -973,6 +997,26 @@ void leave_creature_as_passenger(NetUserId user, struct Thing *thing)
   clear_selected_thing(ustate);
 }
 
+TbBool thing_is_possessed(const struct Thing *thing)
+{
+    return user_controls_thing(ANY_USER, thing, UCT_Direct | UCT_Passenger | UCT_Other | UCT_PossessionEntryZoom);
+}
+
+TbBool leave_user_controlled_creature(NetUserId user)
+{
+    struct Thing *thing = thing_get(get_user_state(user)->controlled_thing_idx);
+    switch (get_user_view_type(user))
+    {
+    case PVT_CreatureContrl:
+        leave_creature_as_controller(user, thing);
+        return true;
+    case PVT_CreaturePasngr:
+        leave_creature_as_passenger(user, thing);
+        return true;
+    }
+    return false;
+}
+
 static TbBool user_controls_thing_now(NetUserId user, const struct Thing *thing, uint32_t uct_flags)
 {
     const struct UserState* ustate = get_user_state(user);
@@ -980,15 +1024,17 @@ static TbBool user_controls_thing_now(NetUserId user, const struct Thing *thing,
         return false;
     if ((uct_flags & UCT_Selected) && thing->index == ustate->controlled_thing_idx)
         return true;
+    if (ustate->instance_num == PI_DirctCtrl || ustate->instance_num == PI_PsngrCtrl)
+    {
+        const uint32_t entry_flag = (ustate->instance_num == PI_DirctCtrl) ? UCT_Direct : UCT_Passenger;
+        return (uct_flags & UCT_PossessionEntryZoom) && (uct_flags & entry_flag) && thing->index == ustate->influenced_thing_idx;
+    }
     const TbBool direct = ustate->work_state == PSt_CtrlDirect || ustate->work_state == PSt_FreeCtrlDirect;
     const TbBool passenger = ustate->work_state == PSt_CtrlPassngr || ustate->work_state == PSt_FreeCtrlPassngr;
     if ((direct && (uct_flags & UCT_Direct)) || (passenger && (uct_flags & UCT_Passenger)))
     {
         switch (ustate->instance_num)
         {
-        case PI_DirctCtrl:
-        case PI_PsngrCtrl:
-            return (uct_flags & UCT_PossessionEntryZoom) && thing->index == ustate->influenced_thing_idx;
         case PI_DirctCtLeave:
         case PI_PsngrCtLeave:
         case PI_ZoomToPos:
@@ -1011,6 +1057,18 @@ NetUserId get_user_controlling_thing(const struct Thing *thing, uint32_t uct_fla
             return user;
     }
     return -1;
+}
+
+TbBool thing_controlled_by_other_user(NetUserId user, const struct Thing *thing, uint32_t uct_flags)
+{
+    if (!thing_exists(thing))
+        return false;
+    for (NetUserId other = 0; other < MAX_NET_USERS; other++)
+    {
+        if ((other != user) && user_present(other) && user_controls_thing_now(other, thing, uct_flags))
+            return true;
+    }
+    return false;
 }
 
 TbBool user_controls_thing(NetUserId user, const struct Thing *thing, uint32_t uct_flags)
@@ -1063,7 +1121,7 @@ TbBool clear_selected_thing(struct UserState *ustate)
  * @param rkind Kind of the room.
  * @return Returns room struct, or invalid room on error.
  */
-struct Room *player_build_room_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, RoomKind rkind, int slabs_left)
+struct Room *player_build_room_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, NetUserId user, RoomKind rkind, int slabs_left)
 {
     struct PlayerInfo* player = get_player(plyr_idx);
     struct Dungeon* dungeon = get_players_dungeon(player);
@@ -1072,15 +1130,15 @@ struct Room *player_build_room_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, Play
     if (!is_room_available(plyr_idx, rkind)) {
         // It shouldn't be possible to select unavailable room
         WARNLOG("Player %d tried to build %s which is unavailable at (%d,%d)",(int)plyr_idx,room_code_name(rkind),(int)stl_x,(int)stl_y);
-        play_player_sample(player->id_number, snd_refusal);
+        play_action_sample(plyr_idx, user, snd_refusal);
         return INVALID_ROOM;
     }
     if (!can_build_room_at_slab(plyr_idx, rkind, subtile_slab(stl_x), subtile_slab(stl_y))) {
         // It shouldn't be possible to select unavailable room
         WARNLOG("Player %d tried to build %s on a forbidden subtile (%d,%d)",(int)plyr_idx,
             room_code_name(rkind),(int)stl_x,(int)stl_y);
-        if (is_my_player_number(player->id_number)) {
-            if (!player->roomspace.is_active)
+        if (is_local_action(plyr_idx, user)) {
+            if (!get_local_user_state()->roomspace.is_active)
             {
                 play_non_3d_sample(snd_refusal);
             }
@@ -1090,7 +1148,7 @@ struct Room *player_build_room_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, Play
     // Check if there's a place for new room
     if (!i_can_allocate_free_room_structure())
     {
-      play_player_sample(player->id_number, snd_refusal);
+      play_action_sample(plyr_idx, user, snd_refusal);
       return INVALID_ROOM;
     }
     if (slabs_left < 1)
@@ -1120,7 +1178,7 @@ struct Room *player_build_room_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, Play
             }
             dungeon->lvstats.bridges_built++;
         }
-      if (is_my_player_number(player->id_number)) {
+      if (is_local_action(plyr_idx, user)) {
           play_non_3d_sample(snd_tile_place);
           if (slabs_left > 2) // more slabs follow this one
           {
@@ -1132,7 +1190,7 @@ struct Room *player_build_room_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, Play
     return room;
 }
 
-TbBool player_place_trap_without_check_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, ThingModel tngmodel, TbBool free)
+TbBool player_place_trap_without_check_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, NetUserId user, ThingModel tngmodel, TbBool free)
 {
     struct TrapConfigStats* trap_cfg = get_trap_model_stats(tngmodel);
     struct Coord3d pos;
@@ -1180,23 +1238,23 @@ TbBool player_place_trap_without_check_at(MapSubtlCoord stl_x, MapSubtlCoord stl
     }
     if (!dungeon_invalid(dungeon))
         dungeon->camera_deviate_jump = 192;
-    play_player_sample(plyr_idx, trap_cfg->place_sound_idx);
+    play_action_sample(plyr_idx, user, trap_cfg->place_sound_idx);
 
     lua_on_trap_placed(traptng);
     return true;
 }
 
-TbBool player_place_trap_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, ThingModel tngmodel)
+TbBool player_place_trap_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, NetUserId user, ThingModel tngmodel)
 {
     if (!is_trap_placeable(plyr_idx, tngmodel))
     {
         SYNCDBG(7,"Player %d tried to build %s but has none to place", (int)plyr_idx, trap_code_name(tngmodel));
         return false;
     }
-    return player_place_trap_without_check_at(stl_x, stl_y, plyr_idx, tngmodel,false);
+    return player_place_trap_without_check_at(stl_x, stl_y, plyr_idx, user, tngmodel, false);
 }
 
-TbBool player_place_door_without_check_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, ThingModel tngmodel,TbBool free)
+TbBool player_place_door_without_check_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, NetUserId user, ThingModel tngmodel, TbBool free)
 {
     unsigned char orient = find_door_angle(stl_x, stl_y, plyr_idx);
     struct Coord3d pos;
@@ -1231,26 +1289,26 @@ TbBool player_place_door_without_check_at(MapSubtlCoord stl_x, MapSubtlCoord stl
     }
     if (!dungeon_invalid(dungeon))
         dungeon->camera_deviate_jump = 192;
-    play_player_sample(plyr_idx, get_door_model_stats(tngmodel)->place_sound_idx);
+    play_action_sample(plyr_idx, user, get_door_model_stats(tngmodel)->place_sound_idx);
     return true;
 }
 
-TbBool player_place_door_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, ThingModel tngmodel)
+TbBool player_place_door_at(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, NetUserId user, ThingModel tngmodel)
 {
     if (!is_door_placeable(plyr_idx, tngmodel)) {
         SYNCDBG(7,"Player %d tried to build %s but has none to place",(int)plyr_idx,door_code_name(tngmodel));
         return false;
     }
-    return player_place_door_without_check_at(stl_x, stl_y, plyr_idx, tngmodel,0);
+    return player_place_door_without_check_at(stl_x, stl_y, plyr_idx, user, tngmodel, false);
 }
 
-long packet_place_door(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, ThingModel tngmodel, TbBool allowed)
+long packet_place_door(MapSubtlCoord stl_x, MapSubtlCoord stl_y, PlayerNumber plyr_idx, NetUserId user, ThingModel tngmodel, TbBool allowed)
 {
     if (!allowed) {
-        play_player_sample(plyr_idx, snd_refusal);
+        play_action_sample(plyr_idx, user, snd_refusal);
         return 0;
     }
-    if (!player_place_door_at(stl_x, stl_y, plyr_idx, tngmodel)) {
+    if (!player_place_door_at(stl_x, stl_y, plyr_idx, user, tngmodel)) {
         return 0;
     }
     MapSlabCoord slb_x = subtile_slab(stl_x);

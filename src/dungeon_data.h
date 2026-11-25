@@ -47,7 +47,6 @@ extern "C" {
 #define DUNGEONS_COUNT              9
 #define DIGGER_TASK_MAX_COUNT       64
 #define DUNGEON_RESEARCH_COUNT      2000
-#define MAX_THINGS_IN_HAND          64
 #define TURN_TIMERS_COUNT           8
 #define SCRIPT_FLAGS_COUNT          8
 #define MAX_SOE_RADIUS              13
@@ -149,8 +148,12 @@ struct Dungeon {
     short digger_list_start;
     ThingIndex summon_list[MAX_SUMMONS];
     unsigned short num_summon;
+
+    /* FIXME: rename to "drop_queue".
+     * Once per turn, a Thing in this list will be dropped at essential_pos. */
     ThingIndex things_in_hand[MAX_THINGS_IN_HAND];
-    unsigned char num_things_in_hand;
+    uint8_t num_things_in_hand;
+    
     unsigned short crmodel_state_type_count[CREATURE_TYPES_MAX][STATE_TYPES_COUNT];
     unsigned short guijob_all_creatrs_count[CREATURE_TYPES_MAX][3];
     unsigned short guijob_angry_creatrs_count[CREATURE_TYPES_MAX][3];
@@ -166,6 +169,7 @@ struct Dungeon {
     uint32_t cta_start_turn;
     TbBool cta_free;
     uint32_t must_obey_turn;
+    PowerKind must_obey_idx;
     int hold_audience_cast_turn;
     int scavenge_counters_turn;
     /** Counter of creatures scavenging of each kind, zeroized and recomputed each game turn. */

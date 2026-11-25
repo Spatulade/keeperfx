@@ -30,6 +30,8 @@
 #include "game_legacy.h"
 #include "creature_states.h"
 #include "map_data.h"
+#include "engine_textures.h"
+#include "kfx/tilesets/TileSetScan.h"
 #include "post_inc.h"
 #include "lua_triggers.h"
 
@@ -168,14 +170,11 @@ void set_slab_owner(MapSlabCoord slb_x, MapSlabCoord slb_y, PlayerNumber owner)
     }
     PlayerNumber old_owner = slb->owner;
     struct Dungeon *dungeon = get_dungeon(owner);
+    SlabCodedCoords slb_num = get_slab_number(slb_x, slb_y);
     if (dungeon->texture_pack == 0)
-    {
-        game.slab_ext_data[get_slab_number(slb_x,slb_y)] = game.slab_ext_data_initial[get_slab_number(slb_x,slb_y)];
-    }
+        set_slab_texture_set(slb_num, game.slab_ext_data_initial[slb_num], false);
     else
-    {
-        game.slab_ext_data[get_slab_number(slb_x,slb_y)] = dungeon->texture_pack;
-    }
+        set_slab_texture_set(slb_num, dungeon->texture_pack, false);
     slb->owner = owner;
     if(old_owner != owner)
     {
@@ -633,6 +632,8 @@ void collect_rooms_around_slab(MapSlabCoord slb_x, MapSlabCoord slb_y, struct Ro
         if (slabst->category == SlbAtCtg_RoomInterior)
         {
             struct Room* room = slab_room_get(sslb_x, sslb_y);
+            if (room_is_invalid(room))
+                continue;
             for (int i = 0; i < room_list_len; i++)
             {
                 if (room_list[i] == room) {
@@ -888,11 +889,13 @@ TbBool player_can_claim_slab(PlayerNumber plyr_idx, MapSlabCoord slb_x, MapSlabC
 void set_player_texture(PlayerNumber plyr_idx, long texture_id)
 {
     struct Dungeon* dungeon = get_dungeon(plyr_idx);
-    TbBool reset = (texture_id < 0);
+    TbBool reset = (texture_id <= 0); // 0 is NONE/DEFAULT; a file index arrives as slot+1
     if (reset)
         dungeon->texture_pack = 0;
     else
         dungeon->texture_pack = texture_id;
+    if (!reset)
+        texture_set_request(texture_id & TILE_SET_INDEX_MASK);
 
     for (MapSlabCoord slb_y=0; slb_y < game.map_tiles_y; slb_y++)
     {
@@ -901,14 +904,11 @@ void set_player_texture(PlayerNumber plyr_idx, long texture_id)
             struct SlabMap* slb = get_slabmap_block(slb_x,slb_y);
             if (slabmap_owner(slb) == plyr_idx)
             {
+                SlabCodedCoords slb_num = get_slab_number(slb_x, slb_y);
                 if (reset)
-                {
-                    game.slab_ext_data[get_slab_number(slb_x,slb_y)] = game.slab_ext_data_initial[get_slab_number(slb_x,slb_y)];
-                }
+                    set_slab_texture_set(slb_num, game.slab_ext_data_initial[slb_num], false);
                 else
-                {
-                    game.slab_ext_data[get_slab_number(slb_x,slb_y)] = texture_id;
-                }
+                    set_slab_texture_set(slb_num, texture_id, false);
             }
         }
     }

@@ -457,6 +457,9 @@ TbBool object_is_gold(const struct Thing *thing)
  */
 TbBool object_is_gold_hoard(const struct Thing *thing)
 {
+    if (thing->class_id != TCls_Object) {
+        return false;
+    }
     struct ObjectConfigStats* objst = get_object_model_stats(thing->model);
     return (objst->genre == OCtg_GoldHoard);
 }
@@ -641,6 +644,15 @@ TbBool delete_lair_totem(struct Thing *lairtng)
     return true;
 }
 
+static short possessed_food_peck_pitch(unsigned char timer)
+{
+    if (timer == 0)
+        return 0;
+    if (timer <= 3)
+        return DEGREES_360 - 116 * timer;
+    return (116 * timer + 1352) & ANGLE_MASK;
+}
+
 static long food_moves(struct Thing *objtng)
 {
     struct Coord3d pos;
@@ -656,9 +668,11 @@ static long food_moves(struct Thing *objtng)
     TbBool dirct_ctrl = user_controls_thing(ANY_USER, objtng, UCT_Direct | UCT_PossessionEntryZoom);
     if (dirct_ctrl)
     {
+        objtng->move_angle_z = 0;
         if (objtng->food.possession_startup_timer > 0)
         {
             objtng->food.possession_startup_timer--;
+            objtng->move_angle_z = possessed_food_peck_pitch(objtng->food.possession_startup_timer);
             return TUFRet_Modified;
         }
     }
@@ -1414,7 +1428,7 @@ static TngUpdateRet object_update_call_to_arms(struct Thing *thing)
             struct Coord3d pos;
             pos.x.val = subtile_coord_center(dungeon->cta_stl_x);
             pos.y.val = subtile_coord_center(dungeon->cta_stl_y);
-            pos.z.val = get_thing_height_at(thing, &pos);
+            pos.z.val = get_thing_height_at_xy(thing, &pos);
             move_thing_in_map(thing, &pos);
             reset_interpolation_of_thing(thing);
             set_thing_draw(thing, ctagfx->birth_anim_idx, 256, objst->sprite_size_max, 0, 0, ODC_Default);
@@ -1676,7 +1690,7 @@ static TbBool find_free_position_on_slab(struct Thing* thing, struct Coord3d* po
             {
                 pos->x.val = subtile_coord_center(x);
                 pos->y.val = subtile_coord_center(y);
-                pos->z.val = get_thing_height_at_with_radius(thing, pos, nav_sizexy);
+                pos->z.val = get_thing_height_at_xy_with_radius(thing, pos, nav_sizexy);
                 if (!thing_in_wall_at_with_radius(thing, pos, nav_sizexy)) {
                     return true;
                 }

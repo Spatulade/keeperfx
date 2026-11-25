@@ -20,7 +20,7 @@
 #include "packets.h"
 #include "replay.h"
 #include "net_input_lag.h"
-#include "net_checksums.h"
+#include "net_checksum_turn.h"
 #include "net_lobby.h"
 
 #include <math.h>
@@ -81,6 +81,7 @@
 #include "tasks_list.h"
 #include "power_specials.h"
 #include "power_hand.h"
+#include "power_hand_fp.h"
 #include "room_util.h"
 #include "roomspace_input.h"
 #include "room_workshop.h"
@@ -107,6 +108,7 @@
 #include "spdigger_stack.h"
 #include "frontmenu_ingame_map.h"
 #include "lua_triggers.h"
+#include "cursor_tag.h"
 
 #include "keeperfx.hpp"
 #include "post_inc.h"
@@ -188,7 +190,7 @@ struct Room *keeper_build_room(NetUserId user,long stl_x,long stl_y,long plyr_id
     // Take top left subtile on single subtile boundbox, take center subtile on full slab boundbox
     MapCoord x = ((ustate->full_slab_cursor == 0) ? slab_subtile(subtile_slab(stl_x), 0) : slab_subtile_center(subtile_slab(stl_x)));
     MapCoord y = ((ustate->full_slab_cursor == 0) ? slab_subtile(subtile_slab(stl_y), 0) : slab_subtile_center(subtile_slab(stl_y)));
-    struct Room* room = player_build_room_at(x, y, plyr_idx, rkind, ustate->boxsize);
+    struct Room* room = player_build_room_at(x, y, plyr_idx, user, rkind, ustate->boxsize);
     if (!room_is_invalid(room))
     {
         if (ustate->boxsize > 0)
@@ -297,7 +299,7 @@ static TbBool resync_game_allowed(void)
     return true;
 }
 
-TbBool player_sell_room_at_subtile(long plyr_idx, long stl_x, long stl_y)
+TbBool player_sell_room_at_subtile(PlayerNumber plyr_idx, NetUserId user, MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
     struct Room* room = subtile_room_get(stl_x, stl_y);
     if (room_is_invalid(room))
@@ -314,7 +316,7 @@ TbBool player_sell_room_at_subtile(long plyr_idx, long stl_x, long stl_y)
         dungeon->camera_deviate_jump = 192;
     }
     delete_room_slab(subtile_slab(stl_x), subtile_slab(stl_y), 0);
-    play_player_sample(plyr_idx, snd_tile_sell);
+    play_action_sample(plyr_idx, user, snd_tile_sell);
     if (revenue != 0)
     {
         struct Coord3d pos;
@@ -332,6 +334,8 @@ void process_pause_packet(long curr_pause, long new_pause)
   TbBool can = true;
   for (NetUserId user = 0; user < MAX_NET_USERS; user++)
   {
+    if (!user_present(user))
+        continue;
     player = get_user_player(user);
     if (is_active_keeper(player) && (player->allocflags & PlaF_CompCtrl) == 0)
     {
@@ -810,7 +814,10 @@ TbBool process_user_global_packet_action(NetUserId user)
         frontend_save_continue_game(true);
         free_swipe_graphic();
       }
-      player->display_flags |= PlaF6_PlyrHasQuit;
+      // a shared keeper is also other users', so only flag the local quitter's
+      if (user == get_local_user()) {
+          player->display_flags |= PlaF6_PlyrHasQuit;
+      }
       process_user_leave_game_packet(user);
       return 1;
   case PckA_ForceApplicationClose:
@@ -824,7 +831,9 @@ TbBool process_user_global_packet_action(NetUserId user)
         }
         else
         {
-          player->display_flags |= PlaF6_PlyrHasQuit;
+          if (user == get_local_user()) {
+              player->display_flags |= PlaF6_PlyrHasQuit;
+          }
           process_user_leave_game_packet(user);
         }
         return 1;
@@ -1004,13 +1013,13 @@ TbBool process_user_global_packet_action(NetUserId user)
   case PckA_UsePwrHandPick:
       thing = thing_get(pckt->actn_par1);
       if ((pckt->control_flags & PCtr_Gui) != 0) {
-          magic_use_available_power_on_thing(plyr_idx, PwrK_HAND, 0, thing->mappos.x.stl.num, thing->mappos.y.stl.num, thing, PwMod_Default);
+          magic_use_available_power_on_thing(plyr_idx, user, PwrK_HAND, 0, thing->mappos.x.stl.num, thing->mappos.y.stl.num, thing, PwMod_PickUpEvent);
       } else {
-          use_power_hand(plyr_idx, thing->mappos.x.stl.num, thing->mappos.y.stl.num, pckt->actn_par1);
+          use_power_hand(plyr_idx, user, thing->mappos.x.stl.num, thing->mappos.y.stl.num, pckt->actn_par1);
       }
       return 0;
   case PckA_UsePwrHandDrop:
-      dump_first_held_thing_on_map(plyr_idx, pckt->actn_par1, pckt->actn_par2, 1);
+      dump_first_held_thing_on_map(plyr_idx, user, pckt->actn_par1, pckt->actn_par2, 1);
       return 0;
   case PckA_EventBoxTurnOff:
       if (game.event[pckt->actn_par1].kind != EvKind_Objective) {
@@ -1021,13 +1030,13 @@ TbBool process_user_global_packet_action(NetUserId user)
   case PckA_EventBoxClose:
       return false;
   case PckA_GenericLevelPower:
-      magic_use_available_power_on_level(plyr_idx, pckt->actn_par2, 0, PwMod_Default);
+      magic_use_available_power_on_level(plyr_idx, user,pckt->actn_par2, 0, PwMod_Default);
       return 0;
   case PckA_UsePwrObey:
-      magic_use_available_power_on_level(plyr_idx, PwrK_OBEY, 0, PwMod_Default);
+      magic_use_available_power_on_level(plyr_idx, user,PwrK_OBEY, 0, PwMod_Default);
       return 0;
   case PckA_UsePwrArmageddon:
-      magic_use_available_power_on_level(plyr_idx, PwrK_ARMAGEDDON, 0, PwMod_Default);
+      magic_use_available_power_on_level(plyr_idx, user,PwrK_ARMAGEDDON, 0, PwMod_Default);
       return 0;
   case PckA_TurnOffQuery:
       turn_off_query(user);
@@ -1074,10 +1083,9 @@ TbBool process_user_global_packet_action(NetUserId user)
       return 0;
   case PckA_DumpHeldThingToOldPos:
       dungeon = get_players_num_dungeon(plyr_idx);
-      if (!power_hand_is_empty(player))
-      {
-          thing = get_first_thing_in_power_hand(player);
-          dump_first_held_thing_on_map(plyr_idx, thing->mappos.x.stl.num, thing->mappos.y.stl.num, 1);
+      thing = get_first_held_thing(ustate);
+      if (thing != NULL) {
+          dump_first_held_thing_on_map(plyr_idx, user, thing->mappos.x.stl.num, thing->mappos.y.stl.num, 1);
       }
       return false;
   case PckA_PwrSOEDis:
@@ -1085,7 +1093,7 @@ TbBool process_user_global_packet_action(NetUserId user)
       return false;
   case PckA_UsePwrOnThing:
       i = get_power_overcharge_level(ustate);
-      directly_cast_spell_on_thing(plyr_idx, pckt->actn_par1, pckt->actn_par2, i);
+      directly_cast_spell_on_thing(plyr_idx, user, pckt->actn_par1, pckt->actn_par2, i);
       return 0;
   case PckA_PlyrToggleAlly:
       if (!is_player_ally_locked(plyr_idx, pckt->actn_par1))
@@ -1165,6 +1173,17 @@ void process_map_packet_clicks(NetUserId user)
 void process_user_packet(NetUserId user)
 {
     struct Packet* pckt = get_packet(user);
+    struct UserState* ustate = get_user_state(user);
+    // before the empty check, so closing a menu (an empty packet) clears the flag
+    if (!user_state_invalid(ustate)) {
+        ustate->additional_flags &= ~(UsrAF_GameMenuOpen | UsrAF_SpecialMenuOpen | UsrAF_ChatOpen);
+        if (flag_is_set(pckt->control_flags, PCtr_GameMenuOpen))
+            ustate->additional_flags |= UsrAF_GameMenuOpen;
+        if (flag_is_set(pckt->control_flags, PCtr_ChatOpen))
+            ustate->additional_flags |= UsrAF_ChatOpen;
+        if (flag_is_set(pckt->control_flags, PCtr_SpecialMenuOpen))
+            ustate->additional_flags |= UsrAF_SpecialMenuOpen;
+    }
     if (is_packet_empty(pckt))
     {
         MULTIPLAYER_LOG("process_user_packet: Skipping empty packet for user %d", user);
@@ -1173,7 +1192,6 @@ void process_user_packet(NetUserId user)
     SYNCDBG(6, "Processing user %d packet of type %d.", user, (int)pckt->action);
     if (flag_is_set(game.operation_flags, GOF_Paused))
         replay_record_paused_action(user, pckt);
-    struct UserState* ustate = get_user_state(user);
     apply_creature_input_packet_values(ustate, pckt);
 
   if (!process_user_global_packet_action(user) && !network_user_is_spectator(user)) {
@@ -1201,6 +1219,7 @@ void process_user_packet(NetUserId user)
           default:
             break;
       }
+      process_fp_hand_carrier_packet(user, pckt);
   }
   SYNCDBG(8,"Finished");
 }
@@ -1228,7 +1247,7 @@ TbBool process_user_dungeon_control_packet_action(NetUserId user)
     switch (pckt->action)
     {
     case PckA_HoldAudience:
-        magic_use_available_power_on_level(plyr_idx, PwrK_HOLDAUDNC, 0, PwMod_Default);
+        magic_use_available_power_on_level(plyr_idx, user,PwrK_HOLDAUDNC, 0, PwMod_Default);
         break;
     case PckA_UseSpecialBox:
         activate_dungeon_special(thing_get(pckt->actn_par1), player);
@@ -1244,6 +1263,8 @@ TbBool process_user_dungeon_control_packet_action(NetUserId user)
         if (computer_assistant_allowed()) {
             toggle_computer_player(plyr_idx);
         }
+        break;
+    case PckA_SetHandDropTarget:
         break;
     default:
         return process_user_dungeon_control_cheats_packet_action(user, pckt);
@@ -1272,12 +1293,36 @@ static int32_t clamp_first_person_pitch(int32_t pitch)
     return pitch;
 }
 
+// pitch limits depend on if creature is being held in hand or not (archon)
+static int32_t clamp_thing_first_person_pitch(const struct Thing *thing, int32_t pitch)
+{
+    const NetUserId possessor = get_user_controlling_thing(thing, UCT_Direct);
+    int32_t turn;
+    switch (get_fp_hand_phase(possessor, thing, &turn))
+    {
+    case FPHand_Squish:
+        return FP_HAND_SQUISH_PITCH & ANGLE_MASK;
+    case FPHand_Drop:
+        // briefly locked during view dip before hand
+        if (turn < FP_HAND_DROP_DIP_TURNS) {
+            return 0;
+        }
+        return clamp_first_person_pitch(pitch);
+    case FPHand_Lift:
+    case FPHand_Held:
+        return clamp_fp_hand_pitch(pitch);
+    case FPHand_None:
+    default:
+        return clamp_first_person_pitch(pitch);
+    }
+}
+
 void process_first_person_look(struct Thing *thing, int32_t turn_x, int32_t turn_y, int32_t current_horizontal, int32_t current_vertical, int32_t *out_horizontal, int32_t *out_vertical, int32_t *out_roll)
 {
     const int32_t max_turn = first_person_max_turn(thing);
     turn_x = clamp(turn_x, -max_turn, max_turn);
     turn_y = clamp(turn_y, -max_turn, max_turn);
-    *out_vertical = clamp_first_person_pitch(current_vertical + turn_y);
+    *out_vertical = clamp_thing_first_person_pitch(thing, current_vertical + turn_y);
     *out_horizontal = (current_horizontal + turn_x) & ANGLE_MASK;
     *out_roll = 170 * turn_x / max_turn;
 }
@@ -1288,9 +1333,9 @@ static void apply_first_person_look(struct Thing *thing, struct CreatureControl 
 {
     const int32_t max_turn = first_person_max_turn(thing);
     const int32_t turn_x = clamp(get_angle_signed_difference(thing->move_angle_xy, pckt->pos_x & ANGLE_MASK), -max_turn, max_turn);
-    const int32_t turn_y = clamp(get_angle_signed_difference(thing->move_angle_z, clamp_first_person_pitch(pckt->pos_y)), -max_turn, max_turn);
+    const int32_t turn_y = clamp(get_angle_signed_difference(thing->move_angle_z, clamp_thing_first_person_pitch(thing, pckt->pos_y)), -max_turn, max_turn);
     thing->move_angle_xy = (thing->move_angle_xy + turn_x) & ANGLE_MASK;
-    thing->move_angle_z = clamp_first_person_pitch(thing->move_angle_z + turn_y);
+    thing->move_angle_z = clamp_thing_first_person_pitch(thing, thing->move_angle_z + turn_y);
     cctrl->roll = 170 * turn_x / max_turn;
 }
 
@@ -1303,7 +1348,7 @@ TbBool can_process_creature_input(struct Thing *thing)
         return false;
     }
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
-    if ((cctrl->stateblock_flags != 0) || (thing->active_state == CrSt_CreatureUnconscious)) {
+    if ((cctrl->stateblock_flags != 0) || (thing->active_state == CrSt_CreatureUnconscious) || (thing->active_state == CrSt_CreatureSlapCowers)) {
         return false;
     }
     return true;
@@ -1324,6 +1369,14 @@ static void apply_creature_vertical_control(struct Thing *thing, struct Creature
         cctrl->moveaccel.z.val = distance_with_angle_to_coord_z(cctrl->vertical_speed, angle);
     } else {
         cctrl->moveaccel.z.val = 0;
+    }
+}
+
+static void apply_creature_look_controls(struct Thing *thing, struct CreatureControl *cctrl, const struct Packet *pckt)
+{
+    // Discard inputs for frozen creature
+    if ((packet_camera_context(pckt) == CamIV_FirstPerson) && !flag_is_set(game.operation_flags, GOF_Paused)) {
+        apply_first_person_look(thing, cctrl, pckt);
     }
 }
 
@@ -1357,10 +1410,7 @@ void apply_creature_movement_controls(struct Thing *thing, struct CreatureContro
             apply_creature_vertical_control(thing, cctrl, speed_limit, CREATURE_DESCEND_ANGLE);
         }
     }
-    // Discard inputs for frozen creature
-    if ((packet_camera_context(pckt) == CamIV_FirstPerson) && !flag_is_set(game.operation_flags, GOF_Paused)) {
-        apply_first_person_look(thing, cctrl, pckt);
-    }
+    apply_creature_look_controls(thing, cctrl, pckt);
 }
 
 CrInstance get_packet_triggered_instance(const struct Thing *thing, const struct CreatureControl *cctrl, const struct Packet *pckt)
@@ -1400,6 +1450,13 @@ void process_user_creature_control_packet_control(NetUserId user)
     if (!thing_is_creature(cctng) || creature_control_invalid(ccctrl)) {
         return;
     }
+    // hand held (archon): possessor can look around only, no other actions.
+    if (fp_hand_blocks_creature_commands(cctng)) {
+        if (can_process_creature_input(cctng)) {
+            apply_creature_look_controls(cctng, ccctrl, pckt);
+        }
+        return;
+    }
     apply_creature_movement_controls(cctng, ccctrl, pckt);
     const CrInstance inst_id = get_packet_triggered_instance(cctng, ccctrl, pckt);
     if (possession_instance_can_start(cctng, ccctrl, inst_id, get_gameturn(), pckt, true)) {
@@ -1409,14 +1466,27 @@ void process_user_creature_control_packet_control(NetUserId user)
 
 void process_user_creature_control_packet_action(NetUserId user)
 {
-  const PlayerNumber plyr_idx = get_net_user_player_number(user);
   struct CreatureControl *cctrl;
   struct Thing *thing;
   struct Packet *pckt;
   CrInstance inst_id;
   struct UserState* ustate = get_user_state(user);
   pckt = get_packet(user);
-  SYNCDBG(6,"Processing player %d action %d",(int)plyr_idx,(int)pckt->action);
+  SYNCDBG(6,"Processing user %d action %d",(int)user,(int)pckt->action);
+  // Carried in a co-user's hand.
+  // Can't act except to leave.
+  thing = thing_get(ustate->controlled_thing_idx);
+  if (thing_exists(thing) && fp_hand_blocks_creature_commands(thing)) {
+      switch (pckt->action)
+      {
+      case PckA_CtrlCrtrSetInstnc:
+      case PckA_CheatCtrlCrtrSetInstnc:
+      case PckA_DirectCtrlDragDrop:
+          return;
+      default:
+          break;
+      }
+  }
   switch (pckt->action)
   {
   case PckA_DirectCtrlExit:
@@ -1443,7 +1513,7 @@ void process_user_creature_control_packet_action(NetUserId user)
         cctrl->active_instance_id = pckt->actn_par1;
       } else if (possession_instance_can_start(thing, cctrl, inst_id, get_gameturn(), pckt, false)) {
         process_player_use_instance(thing, inst_id, pckt);
-        if (plyr_idx == my_player_number) {
+        if (is_local_user(user)) {
             instant_instance_selected(inst_id);
         }
       }
@@ -1483,6 +1553,10 @@ static void load_old_packets(void)
         const struct Packet *packet = get_history_packet(i, historical_turn);
         if (packet != NULL) {
             game.packets[i] = *packet;
+            const struct QueuedGameplayChat *chat = find_gameplay_chat(i, packet->turn);
+            if (flag_is_set(packet->control_flags, PCtr_ChatMessage) && (chat != NULL)) {
+                queue_gameplay_chat_message(chat->user, chat->message, chat->cursor_x, chat->cursor_y);
+            }
             if (i <= 1) {
                 if (is_packet_empty(&game.packets[i])) {
                     MULTIPLAYER_LOG("load_input_lag_packets: loaded packet[%s] is EMPTY", player_name);
@@ -1538,6 +1612,7 @@ enum PacketExchangeResult exchange_packets(void)
     update_dig_tag_input();
     if (!replay.load_enable && !spectator) {
         set_pending_timestamp_packet_action(get_local_packet());
+        set_flag_value(my_packet->control_flags, PCtr_ChatMessage, find_gameplay_chat(local_user, my_packet->turn) != NULL);
         camera_packet_set_state(get_local_packet());
         set_packet_possession_target(get_local_packet());
         observer_set_packet_cursor(get_local_packet());
@@ -1637,6 +1712,7 @@ void process_packets(void)
     // Process the packets
     for (NetUserId user = 0; (user < PACKETS_COUNT) && !replay_playback_is_paused(); user++)
     {
+        clear_co_user_cursor_box(user);
         const PlayerNumber plyr_idx = get_net_user_player_number(user);
         if (plyr_idx < 0) {
             continue;

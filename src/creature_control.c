@@ -180,7 +180,7 @@ struct Thing *create_and_control_creature_as_controller(NetUserId user, ThingMod
     if (thing->class_id == TCls_Creature) {
         struct CreatureModelConfig* crconf = creature_stats_get_from_thing(thing);
         SYNCDBG(7,"Possessing creature '%s', eye_effect=%d", crconf->name, crconf->eye_effect);
-        set_player_lens(player->id_number, crconf->eye_effect);
+        set_user_lens(user, crconf->eye_effect);
     }
     return thing;
 }
@@ -220,7 +220,11 @@ TbBool disband_creatures_group(struct Thing *thing)
 
 struct CreatureSound *get_creature_sound(struct Thing *thing, long snd_idx)
 {
-    ThingModel cmodel = thing->model;
+    return get_creature_model_sound(thing->model, snd_idx);
+}
+
+struct CreatureSound *get_creature_model_sound(ThingModel cmodel, long snd_idx)
+{
     if ((cmodel < 1) || (cmodel >= game.conf.crtr_conf.model_count))
     {
         ERRORLOG("Trying to get sound for undefined creature type %d",(int)cmodel);
@@ -317,6 +321,18 @@ void play_creature_sound(struct Thing *thing, long snd_idx, long priority, long 
     } else {
         thing_play_sample(thing, sample_idx, NORMAL_PITCH, 0, 3, 0, priority, FULL_LOUDNESS);
     }
+}
+
+/** Plays one of a creature's sounds without positioning it, as heard from inside the creature. */
+void play_creature_sound_non_3d(struct Thing *thing, long snd_idx)
+{
+    struct CreatureSound* crsound = get_creature_sound(thing, snd_idx);
+    if (crsound->index == 0) {
+        SYNCDBG(19,"No sample %ld for creature %d",snd_idx,thing->model);
+        return;
+    }
+    long i = SOUND_RANDOM(crsound->count);
+    play_non_3d_sample((SoundSmplTblID)(crsound->index < 0 ? crsound->index - i : crsound->index + i));
 }
 
 void play_creature_sound_and_create_sound_thing(struct Thing *thing, long snd_idx, long sound_priority)

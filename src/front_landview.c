@@ -35,6 +35,7 @@
 #include "bflib_math.h"
 #include "bflib_sndlib.h"
 #include "bflib_sound.h"
+#include "kfx/audio/AudioFormats.h"
 #include "sprites.h"
 #include "gui_draw.h"
 #include "bflib_vidraw.h"
@@ -83,6 +84,7 @@ LevelNumber mouse_over_lvnum;
 LevelNumber playing_speech_lvnum;
 struct TbHugeSprite map_window;
 long map_window_len = 0;
+static unsigned char *map_window_buf;
 
 TbClockMSec play_desc_speech_time;
 unsigned long played_bad_descriptive_speech;
@@ -513,16 +515,24 @@ const struct TbSprite *get_ensign_sprite_for_level(struct LevelInformation *lvin
         {
             if (frontend_menu_state == FeSt_NETLAND_VIEW)
             {
-                switch (lvinfo->players)
-                {
-                case 2:
-                    ensign_sprite_index = 5;
-                    break;
+                switch (lvinfo->players) {
                 case 3:
                     ensign_sprite_index = 7;
                     break;
                 case 4:
                     ensign_sprite_index = 9;
+                    break;
+                case 5:
+                    ensign_sprite_index = 11;
+                    break;
+                case 6:
+                    ensign_sprite_index = 13;
+                    break;
+                case 7:
+                    ensign_sprite_index = 15;
+                    break;
+                case 8:
+                    ensign_sprite_index = 17;
                     break;
                 default:
                     ensign_sprite_index = 5;
@@ -530,27 +540,18 @@ const struct TbSprite *get_ensign_sprite_for_level(struct LevelInformation *lvin
                 }
                 if ((fe_net_level_selected == lvinfo->lvnum) || (net_level_highlighted == lvinfo->lvnum))
                     ensign_sprite_index++;
-                if (ensign_type == EnsCoop)
-                {
-                    ensign_sprite_index = ensign_sprite_index + 6;
+                if (ensign_type == EnsCoop) {
+                    ensign_sprite_index += 14;
                 }
             }
             else
             {
-                switch (lvinfo->players)
-                {
-                case 2:
-                    ensign_sprite_index = EnsDisMulti2;
-                    break;
-                case 3:
-                    ensign_sprite_index = EnsDisMulti3;
-                    break;
-                case 4:
+                if (lvinfo->players >= 4) {
                     ensign_sprite_index = EnsDisMulti4;
-                    break;
-                default:
+                } else if (lvinfo->players == 3) {
+                    ensign_sprite_index = EnsDisMulti3;
+                } else {
                     ensign_sprite_index = EnsDisMulti2;
-                    break;
                 }
             }
             spr = get_map_ensign(ensign_sprite_index);
@@ -857,7 +858,6 @@ TbBool play_description_speech(LevelNumber lvnum, short play_good)
       {
           fname = prepare_file_fmtpath(FGrp_AtlSound,"%s",lvinfo->speech_before);
       }
-      playing_good_descriptive_speech = 1;
     } else
     {
       if (lvinfo->speech_after[0] == '\0')
@@ -874,8 +874,17 @@ TbBool play_description_speech(LevelNumber lvnum, short play_good)
       {
           fname = prepare_file_fmtpath(FGrp_AtlSound,"%s",lvinfo->speech_after);
       }
-      playing_bad_descriptive_speech = 1;
     }
+    if (!kfx_audio_path_supported(fname))
+    {
+        WARNLOG("unsupported audio format '%s', supported: %s", fname, kfx_audio_format_list_text());
+        playing_speech_lvnum = lvnum;
+        return false;
+    }
+    if (play_good)
+      playing_good_descriptive_speech = 1;
+    else
+      playing_bad_descriptive_speech = 1;
     playing_speech_lvnum = lvnum;
     SYNCMSG("Playing %s", fname);
     //volume is overwritten in update_frontmap_ambient_sound
@@ -925,6 +934,12 @@ void unload_map_and_window(void)
     clear_rooms();
     clear_dungeons();
     memcpy(frontend_palette, frontend_backup_palette, PALETTE_SIZE);
+    if (map_window_buf != NULL)
+    {
+        RendererWaitIdle();
+        free(map_window_buf);
+        map_window_buf = NULL;
+    }
     map_window_len = 0;
 }
 
@@ -980,11 +995,29 @@ TbBool load_map_and_window(LevelNumber lvnum)
         return false;
     }
     map_screen = &game.land_map_start;
-    // Texture blocks memory isn't used here, so reuse it instead of allocating
-    unsigned char* ptr = block_mem;
     memcpy(frontend_backup_palette, &frontend_palette, PALETTE_SIZE);
     // Now prepare window sprite file name and load the file
     fname = prepare_file_fmtpath(FGrp_LandView,"%s.dat",land_window);
+    int32_t wlen = (int32_t)LbFileLengthRnc(fname);
+    if (wlen < (int32_t)(WINDOW_Y_SIZE*sizeof(int32_t)))
+    {
+        ERRORLOG("Unable to load Land Map Window \"%s.dat\"",land_window);
+        unload_map_and_window();
+        return false;
+    }
+    if (map_window_buf != NULL)
+    {
+        RendererWaitIdle();
+        free(map_window_buf);
+    }
+    map_window_buf = (unsigned char *)malloc(wlen);
+    if (map_window_buf == NULL)
+    {
+        ERRORLOG("Not enough memory for Land Map Window \"%s.dat\"",land_window);
+        unload_map_and_window();
+        return false;
+    }
+    unsigned char* ptr = map_window_buf;
     map_window_len = LbFileLoadAt(fname, ptr);
     if (map_window_len < (int32_t)(WINDOW_Y_SIZE*sizeof(int32_t)))
     {
@@ -1163,8 +1196,8 @@ TbBool frontmap_load(void)
     {
         // don't use play_non_3d_sample; we want looping, fading, and volume control
         SoundEmitterID emit_id = get_emitter_id(S3DGetSoundEmitter(Non3DEmitter));
-        play_sample(emit_id, campaign.ambient_good, 0, 0x40, NORMAL_PITCH, -1, 2);
-        play_sample(emit_id, campaign.ambient_bad, 0, 0x40, NORMAL_PITCH, -1, 2);
+        play_sample(emit_id, campaign.ambient_good, 0, 0x40, NORMAL_PITCH, -1, 2, 2147483646, false);
+        play_sample(emit_id, campaign.ambient_bad, 0, 0x40, NORMAL_PITCH, -1, 2, 2147483646, false);
     }
     set_music_volume(settings.music_volume);
     frontmap_start_music();

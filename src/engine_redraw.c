@@ -19,6 +19,7 @@
 #include "pre_inc.h"
 #include "observer.h"
 #include <stdlib.h>
+#include <string.h>
 #include "kfx/renderer/RendererManager.h"
 #include "engine_redraw.h"
 #include "engine_textures.h"
@@ -47,6 +48,7 @@
 #include "engine_lenses.h"
 #include "kfx/ui/GameUI.h"
 #include "local_camera.h"
+#include "local_hand.h"
 #include "local_possession.h"
 #include "front_simple.h"
 #include "front_easter.h"
@@ -125,6 +127,46 @@ static void ensure_map_fade_buffers(int width, int height)
         map_fade_ghost_table = (unsigned char*)malloc(PALETTE_COLORS * PALETTE_COLORS);
 }
 /******************************************************************************/
+enum { CUSTOM_BUFF_SLOTS = 4, CUSTOM_BUFF_ICONS = 32 };
+struct CustomBuffSlot {
+    char name[COMMAND_WORD_LEN];
+    long icons[CUSTOM_BUFF_ICONS];
+    short dy[CUSTOM_BUFF_ICONS];
+    int count;
+};
+static struct CustomBuffSlot custom_buff_slots[CUSTOM_BUFF_SLOTS];
+
+void clear_custom_buff_icons(void)
+{
+    memset(custom_buff_slots, 0, sizeof(custom_buff_slots));
+}
+
+void set_custom_buff_icon_slot(const char *name, const long *icons, const short *dy, int count)
+{
+    struct CustomBuffSlot *slot = NULL;
+    struct CustomBuffSlot *blank = NULL;
+    for (int i = 0; i < CUSTOM_BUFF_SLOTS; i++)
+    {
+        if (strcasecmp(custom_buff_slots[i].name, name) == 0)
+            slot = &custom_buff_slots[i];
+        else if ((blank == NULL) && (custom_buff_slots[i].name[0] == 0))
+            blank = &custom_buff_slots[i];
+    }
+    if (slot == NULL)
+        slot = (count > 0) ? blank : NULL;
+    if (slot == NULL)
+        return;
+    if (count <= 0)
+    {
+        memset(slot, 0, sizeof(*slot));
+        return;
+    }
+    snprintf(slot->name, sizeof(slot->name), "%s", name);
+    slot->count = min(count, CUSTOM_BUFF_ICONS);
+    memcpy(slot->icons, icons, (size_t)slot->count * sizeof(long));
+    memcpy(slot->dy, dy, (size_t)slot->count * sizeof(short));
+}
+
 static void draw_creature_view_icons(struct Thing* creatng)
 {
     struct GuiMenu *gmnu = get_active_menu(menu_id_to_number(GMnu_MAIN));
@@ -176,6 +218,15 @@ static void draw_creature_view_icons(struct Thing* creatng)
         }
         draw_gui_panel_sprite_left(x, y, ps_units_per_px, spridx);
         x += scale_ui_value_lofi(spr->SWidth);
+    }
+    int drawn = 0;
+    for (int slot = 0; slot < CUSTOM_BUFF_SLOTS; slot++)
+    {
+        for (int i = 0; (i < custom_buff_slots[slot].count) && (drawn < CUSTOM_BUFF_ICONS); i++, drawn++)
+        {
+            draw_gui_panel_sprite_left(x, y + custom_buff_slots[slot].dy[i] * ps_units_per_px / 16, ps_units_per_px, custom_buff_slots[slot].icons[i]);
+            x += scale_ui_value_lofi(spr->SWidth);
+        }
     }
     if ( (cctrl->dragtng_idx != 0) && ((creatng->alloc_flags & TAlF_IsDragged) == 0) )
     {
@@ -634,7 +685,10 @@ static TbBool draw_spell_cursor(NetUserId user, PowerKind pwkind, ThingIndex tng
     struct Thing* thing = thing_get(tng_idx);
     TbBool allow_cast = false;
     const struct PowerConfigStats* powerst = get_power_model_stats(pwkind);
-    allow_cast = can_cast_spell(player->id_number, pwkind, stl_x, stl_y, thing, CastChk_SkipThing);
+    allow_cast = can_cast_spell(player->id_number, user,pwkind, stl_x, stl_y, thing, CastChk_SkipThing);
+    if ((pwkind == PwrK_POSSESS) && thing_controlled_by_other_user(user, thing, UCT_Direct | UCT_Passenger | UCT_Other | UCT_PossessionEntryZoom)) {
+        allow_cast = false;
+    }
     if (!allow_cast) {
         set_pointer_graphic(MousePG_DenyMark);
         return false;
@@ -698,7 +752,7 @@ static void process_dungeon_top_pointer_graphic(NetUserId user)
         PowerKind pwkind = ustate->chosen_power_kind;
         thing = thing_get(battle_creature_over);
         TRACE_THING(thing);
-        if (can_cast_spell(player->id_number, pwkind, thing->mappos.x.stl.num, thing->mappos.y.stl.num, thing, CastChk_Default)) {
+        if (can_cast_spell(player->id_number, user,pwkind, thing->mappos.x.stl.num, thing->mappos.y.stl.num, thing, CastChk_Default)) {
             draw_spell_cursor(user, pwkind, battle_creature_over, thing->mappos.x.stl.num, thing->mappos.y.stl.num);
         } else {
             set_pointer_graphic(MousePG_Arrow);
@@ -726,10 +780,9 @@ static void process_dungeon_top_pointer_graphic(NetUserId user)
           i = ustate->secondary_cursor_state;
         else
           i = ustate->primary_cursor_state;
-        if (ustate->instance_num == PI_Grab || ustate->instance_num == PI_Drop || ustate->instance_num == PI_Whip || ustate->instance_num == PI_WhipEnd || power_hand_is_hovering(user) || (!power_hand_is_empty(player) && (i != CSt_DoorKey))) {
+        if ((get_hand_instance_animation(ustate->instance_num) != HndA_None) || power_hand_is_hovering(user) || ((ustate->num_things_in_hand > 0) && (i != CSt_DoorKey))) {
             i = CSt_PowerHand;
-        } else
-        if ((i == CSt_PowerHand) && power_hand_is_empty(player)) {
+        } else if ((i == CSt_PowerHand) && (ustate->num_things_in_hand == 0)) {
             i = CSt_DefaultArrow;
         }
         switch (i) {
@@ -745,15 +798,16 @@ static void process_dungeon_top_pointer_graphic(NetUserId user)
             thing = thing_get(thing_under_hand);
             TRACE_THING(thing);
             TbBool can_cast = false;
-            if ((ustate->input_crtr_control) && (thing_exists(thing)) && (dungeon->things_in_hand[0] != thing_under_hand)) {
+            if ((ustate->input_crtr_control) && (thing_exists(thing)) && (ustate->things_in_hand[0] != thing_under_hand)) {
                 PowerKind pwkind = PwrK_POSSESS;
-                if (can_cast_spell(player->id_number, pwkind, thing->mappos.x.stl.num, thing->mappos.y.stl.num, thing, CastChk_Default)) {
+                TbBool possessed_by_other = thing_controlled_by_other_user(user, thing, UCT_Direct | UCT_Passenger | UCT_Other | UCT_PossessionEntryZoom);
+                if (can_cast_spell(player->id_number, user,pwkind, thing->mappos.x.stl.num, thing->mappos.y.stl.num, thing, CastChk_Default)) {
                     // The condition above makes can_cast_spell() within draw_spell_cursor() to never fail; this is intentional
                     can_cast = true;
                 } else {
-                    thing = get_creature_near_for_controlling(player->id_number, thing->mappos.x.val, thing->mappos.y.val);
+                    thing = get_creature_near_for_controlling(player->id_number, user,thing->mappos.x.val, thing->mappos.y.val);
                     if (!thing_is_invalid(thing)) {
-                        if (can_cast_spell(player->id_number, pwkind, thing->mappos.x.stl.num, thing->mappos.y.stl.num, thing, CastChk_Default)) {
+                        if (can_cast_spell(player->id_number, user,pwkind, thing->mappos.x.stl.num, thing->mappos.y.stl.num, thing, CastChk_Default)) {
                             can_cast = true;
                         }
                     }
@@ -761,12 +815,12 @@ static void process_dungeon_top_pointer_graphic(NetUserId user)
                 if (can_cast) {
                     draw_spell_cursor(user, pwkind, 0, thing->mappos.x.stl.num, thing->mappos.y.stl.num);
                 } else {
-                    set_pointer_graphic(MousePG_Arrow);
+                    set_pointer_graphic(possessed_by_other ? MousePG_DenyMark : MousePG_Arrow);
                 }
 
                 local_state.display_needs_update = true;
             } else
-            if (((ustate->input_crtr_query) && !thing_is_invalid(thing)) && (dungeon->things_in_hand[0] != thing_under_hand)
+            if (((ustate->input_crtr_query) && !thing_is_invalid(thing)) && (ustate->things_in_hand[0] != thing_under_hand)
                 && can_thing_be_queried(thing, player->id_number)) {
                 set_pointer_graphic(MousePG_Query);
                 local_state.display_needs_update = true;
@@ -801,7 +855,7 @@ static void process_dungeon_top_pointer_graphic(NetUserId user)
             stl_x = coord_subtile(pckt->pos_x);
             stl_y = coord_subtile(pckt->pos_y);
         }
-        draw_spell_cursor(user, ustate->chosen_power_kind, 0, stl_x, stl_y);
+        draw_spell_cursor(user, ustate->chosen_power_kind, get_user_thing_under_hand(user), stl_x, stl_y);
         break;
     }
     case PsPg_Query:
@@ -1028,6 +1082,8 @@ void redraw_display(void)
         LbTextDrawResized(0/pixel_size, 0/pixel_size, tx_units_per_px, text);
         LbTextSetWindow(0/pixel_size, 0/pixel_size, MyScreenWidth/pixel_size, MyScreenHeight/pixel_size);
     }
+    draw_archon_co_users();
+    draw_co_user_cursors();
     draw_eastegg();
     if (map_fade == PVT_None) {
         RendererBeginOverlayCapture(OVERLAY_CAPTURE_TOOLTIP);
@@ -1049,6 +1105,7 @@ TbBool keeper_screen_redraw(void)
     RendererClearScreen(144);
     if (RendererBeginFrame())
     {
+        texture_sets_publish_ready();
         if (update_animating_texture_maps()) {
             RendererUpdateAnimatedTiles();
         }

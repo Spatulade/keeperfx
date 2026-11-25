@@ -18,6 +18,8 @@
 #include "kfx/renderer/RendererManager.h"
 #include "kfx/renderer/RendererSettings.h"
 #include "kfx/renderer/RendererThread.h"
+#include "kfx/renderer/opengl/GLCaps.h"
+#include "kfx/renderer/opengl/GLLog.h"
 #include "keeperfx.hpp"
 
 #include "bflib_coroutine.h"
@@ -89,6 +91,7 @@
 #include "engine_lenses.h"
 #include "engine_camera.h"
 #include "local_camera.h"
+#include "local_hand.h"
 #include "engine_arrays.h"
 #include "engine_textures.h"
 #include "engine_redraw.h"
@@ -228,7 +231,7 @@ long double host_packet_received = 1;
 
 void setup_stuff(void)
 {
-    setup_texture_block_mem();
+    texture_sets_init();
     init_fades_table();
     init_alpha_table();
 }
@@ -299,8 +302,6 @@ TbBool initial_setup(void)
     SYNCDBG(6,"Starting");
     // setting this will force video mode change, even if previous one is same
     MinimalResolutionSetup = true;
-    // Set size of static textures buffer
-    game_load_files[1].SLength = max((ulong)TEXTURE_BLOCKS_STAT_COUNT_A*block_dimension*block_dimension,(ulong)LANDVIEW_MAP_WIDTH*LANDVIEW_MAP_HEIGHT);
     if (LbDataLoadAllV2(game_load_files))
     {
         ERRORLOG("Unable to load game_load_files");
@@ -328,6 +329,9 @@ short setup_game(void)
   short result;
   // Do only a very basic setup
   cpu_detect(&cpu_info);
+  
+  SYNCMSG("CPU architecture: %s", cpu_info.architecture);
+#if defined(__i386__) || defined(__x86_64__)
   SYNCMSG("CPU %s type %d family %d model %d stepping %d features %08lx",cpu_info.vendor,
       (int)cpu_get_type(&cpu_info),(int)cpu_get_family(&cpu_info),(int)cpu_get_model(&cpu_info),
       (int)cpu_get_stepping(&cpu_info),cpu_info.feature_edx);
@@ -335,6 +339,7 @@ short setup_game(void)
   {
       SYNCMSG("%s", &cpu_info.brand[0]);
   }
+#endif
   SYNCMSG("Build image base: %p", PlatformManager_GetImageBase());
   SYNCMSG("Operating System: %s", PlatformManager_GetOSVersion());
 
@@ -376,6 +381,7 @@ short setup_game(void)
   // Start the sound system
   if (!init_sound())
     WARNMSG("Sound system disabled.");
+  load_settings();
   // Note: for some reason, signal handlers must be installed AFTER
   // init_sound(). This will probably change when we'll move sound
   // to SDL - then we'll put that line earlier, before setup_game().
@@ -488,7 +494,6 @@ short setup_game(void)
  */
 static bool players_cursor_is_at_top_of_view()
 {
-    const struct PlayerInfo *const player = get_displayed_player();
     const struct UserState *const ustate = get_user_state_prediction(get_displayed_user());
     switch (ustate->work_state)
     {
@@ -516,7 +521,7 @@ static bool players_cursor_is_at_top_of_view()
 
             case CSt_PowerHand:
                 return (local_state.local_thing_under_hand == 0)
-                    || (! power_hand_is_empty(player));
+                    || (ustate->num_things_in_hand > 0);
         }
     }
     return false;
@@ -834,7 +839,11 @@ TbBool toggle_computer_player(PlayerNumber plyr_idx)
     }
     struct Computer2 *comp;
     comp = get_computer_player(player->id_number);
-    computer_force_dump_held_things_on_map(comp, &dungeon->essential_pos);
+    struct Thing *heldtng = thing_get(comp->held_thing_idx);
+    if (!thing_is_invalid(heldtng)) {
+        queue_held_thing_drop(plyr_idx, heldtng);
+    }
+    comp->held_thing_idx = 0;
     return true;
 }
 
@@ -858,7 +867,7 @@ void reinit_level_after_load(void)
     update_room_tab_to_config();
     update_powers_tab_to_config();
     update_trap_tab_to_config();
-    load_texture_map_file(game.texture_id, get_loaded_level_number(), get_level_fgroup(get_loaded_level_number()));
+    texture_sets_load_for_level();
     init_animating_texture_maps();
     init_gui();
     reset_gui_based_on_player_mode();
@@ -1085,6 +1094,7 @@ void clear_game_for_summary(void)
 void clear_game(void)
 {
     SYNCDBG(6,"Starting");
+    texture_sets_release_level();
     clear_game_for_summary();
     game.music_track = 0;
     clear_map();
@@ -1715,6 +1725,9 @@ static short process_command_line(unsigned short argc, char *argv[])
   level_num = LEVELNUMBER_ERROR;
   TbBool one_player_mode = 0;
   narg = 1;
+#ifndef NDEBUG
+  GLStartupOptions_Get().debug_context = true;
+#endif
   char bad_params[TEXT_BUFFER_LENGTH] = "\0";
   while ( narg < argc )
   {
@@ -1752,6 +1765,32 @@ static short process_command_line(unsigned short argc, char *argv[])
       {
         start_params.overrides[Clo_Renderer] = true;
         start_params.renderer_type = RENDERER_OPENGL;
+      } else
+      if (strcasecmp(parstr, "gldebug") == 0)
+      {
+        GLStartupOptions_Get().debug_context = true;
+      } else
+      if (strcasecmp(parstr, "glfail") == 0)
+      {
+#ifndef NDEBUG
+        if (!GLStartupOptions_ParseFailStage(pr2str, &GLStartupOptions_Get().fail))
+            GLWARN("Unknown -glfail stage \"%s\"; use context, version, limits, shader or texture.", pr2str);
+#else
+        GLWARN("-glfail works only in debug builds; ignored.");
+#endif
+        narg++;
+      } else
+      if (strcasecmp(parstr, "glcaps") == 0)
+      {
+#ifndef NDEBUG
+        if (strcasecmp(pr2str, "low") == 0)
+            GLStartupOptions_Get().caps_low = true;
+        else
+            GLWARN("Unknown -glcaps value \"%s\"; only \"low\" is supported.", pr2str);
+#else
+        GLWARN("-glcaps works only in debug builds; ignored.");
+#endif
+        narg++;
       } else
       if (strcasecmp(parstr, "nocd") == 0) // kept for legacy reasons
       {
@@ -1792,6 +1831,7 @@ static short process_command_line(unsigned short argc, char *argv[])
           narg++;
           default_loc_player = atoi(pr2str);
           force_player_num = true;
+          net_set_forced_user_players(pr2str);
       } else
       if (strcasecmp(parstr, "vidsmooth") == 0)
       {
@@ -2141,6 +2181,7 @@ static short reset_game(void)
     LbMouseSuspend();
     LbIKeyboardClose();
     RendererResetScreen(false);
+    texture_sets_shutdown();
     LbDataFreeAllV2(game_load_files);
     free_gui_strings_data();
     free_level_strings_data();
@@ -2188,14 +2229,22 @@ int LbBullfrogMain(unsigned short argc, char *argv[])
     // Setup polyscans
     setup_bflib_render();
     // View the legal screen
-    if (!setup_screen_mode_zero(get_frontend_vidmode()))
+    TbBool display_ok = (setup_screen_mode_zero(get_frontend_vidmode()) != Lb_SCREEN_MODE_INVALID);
+    if (!display_ok && requested_renderer_type != RENDERER_SOFTWARE)
+    {
+        PlatformManager_DestroyWindow();
+        RendererReportSoftwareFallback("the game window could not be created for OpenGL");
+        requested_renderer_type = RENDERER_SOFTWARE;
+        display_ok = (setup_screen_mode_zero(get_frontend_vidmode()) != Lb_SCREEN_MODE_INVALID);
+    }
+    if (!display_ok)
     {
         ERRORLOG("Unable to set display mode for legal screen");
         LbErrorLogClose();
         return 0;
     }
 
-    retval &= (RendererInit((RendererType)requested_renderer_type) != 0);
+    retval &= (RendererStartup((RendererType)requested_renderer_type) != 0);
     RendererSettings_Load();
     PlatformManager_SetWindowTitle(PROGRAM_NAME);
     LbSetIcon(1);

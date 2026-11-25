@@ -57,6 +57,7 @@
 #include "thing_navigate.h"
 #include "thing_physics.h"
 
+#include "engine_textures.h"
 #include "post_inc.h"
 
 #ifdef __cplusplus
@@ -220,6 +221,7 @@ const struct NamedCommand creature_select_criteria_desc[] = {
   {"ON_FRIENDLY_GROUND",   CSelCrit_OnFriendlyGround},
   {"ON_NEUTRAL_GROUND",    CSelCrit_OnNeutralGround},
   {"ANYWHERE",             CSelCrit_Any},
+  {"POSSESSED",            CSelCrit_Possessed},
   {NULL,                   0},
 };
 
@@ -436,26 +438,6 @@ const struct NamedCommand orientation_desc[] = {
   {NULL, 0}
 };
 
-const struct NamedCommand texture_pack_desc[] = {
-  {"NONE",         0},
-  {"STANDARD",     1},
-  {"ANCIENT",      2},
-  {"WINTER",       3},
-  {"SNAKE_KEY",    4},
-  {"STONE_FACE",   5},
-  {"VOLUPTUOUS",   6},
-  {"BIG_BREASTS",  6},
-  {"ROUGH_ANCIENT",7},
-  {"SKULL_RELIEF", 8},
-  {"DESERT_TOMB",  9},
-  {"GYPSUM",       10},
-  {"LILAC_STONE",  11},
-  {"SWAMP_SERPENT",12},
-  {"LAVA_CAVERN",  13},
-  {"LATERITE_CAVERN",14},
-  {NULL,           0},
-};
-
 ThingModel parse_creature_name(const char *creature_name)
 {
     ThingModel ret = get_rid(creature_desc, creature_name);
@@ -464,6 +446,10 @@ ThingModel parse_creature_name(const char *creature_name)
         if (0 == strcasecmp(creature_name, "ANY_CREATURE"))
         {
             return CREATURE_NOT_A_DIGGER; //For scripts, when we say 'ANY_CREATURE' we exclude diggers.
+        }
+        if (0 == strcasecmp(creature_name, "ANY_DIGGER"))
+        {
+            return CREATURE_DIGGER;
         }
     }
     return ret;
@@ -2400,79 +2386,71 @@ static void set_object_configuration_check(const struct ScriptLine *scline)
     set_config_check(&objects_named_fields_set, scline, "SET_OBJECT_CONFIGURATION");
 }
 
-enum CreatureConfiguration
+TbBool get_creature_configuration_variable(const char *name, short *block, short *creatvar)
 {
-    CrtConf_NONE,
-    CrtConf_ATTRIBUTES,
-    CrtConf_ATTRACTION,
-    CrtConf_ANNOYANCE,
-    CrtConf_SENSES,
-    CrtConf_APPEARANCE,
-    CrtConf_EXPERIENCE,
-    CrtConf_JOBS,
-    CrtConf_SPRITES,
-    CrtConf_SOUNDS,
-    CrtConf_LISTEND
-};
+    static const struct {
+        short block;
+        const struct NamedCommand *desc;
+    } blocks[] = {
+        {CrtConf_ATTRIBUTES, creatmodel_attributes_commands},
+        {CrtConf_JOBS,       creatmodel_jobs_commands},
+        {CrtConf_ATTRACTION, creatmodel_attraction_commands},
+        {CrtConf_SOUNDS,     creatmodel_sounds_commands},
+        {CrtConf_SPRITES,    creature_graphics_desc},
+        {CrtConf_ANNOYANCE,  creatmodel_annoyance_commands},
+        {CrtConf_EXPERIENCE, creatmodel_experience_commands},
+        {CrtConf_APPEARANCE, creatmodel_appearance_commands},
+        {CrtConf_SENSES,     creatmodel_senses_commands},
+    };
+    for (int i = 0; i < (int)(sizeof(blocks) / sizeof(blocks[0])); i++)
+    {
+        *creatvar = get_id(blocks[i].desc, name);
+        if (*creatvar != -1)
+        {
+            *block = blocks[i].block;
+            return true;
+        }
+    }
+    return false;
+}
 
 static void set_creature_configuration_check(const struct ScriptLine* scline)
 {
     ALLOCATE_SCRIPT_VALUE(scline->command, 0);
-    short creatvar = get_id(creatmodel_attributes_commands, scline->tp[1]);
-    short block = CrtConf_ATTRIBUTES;
-    if (creatvar == -1)
+    short creatvar;
+    short block;
+    if (!get_creature_configuration_variable(scline->tp[1], &block, &creatvar))
     {
-        creatvar = get_id(creatmodel_jobs_commands, scline->tp[1]);
-        block = CrtConf_JOBS;
-        if (creatvar == -1)
-        {
-            block = CrtConf_ATTRACTION;
-            creatvar = get_id(creatmodel_attraction_commands, scline->tp[1]);
-            if (creatvar == -1)
-            {
-                block = CrtConf_SOUNDS;
-                creatvar = get_id(creatmodel_sounds_commands, scline->tp[1]);
-                if (creatvar == -1)
-                {
-                    block = CrtConf_SPRITES;
-                    creatvar = get_id(creature_graphics_desc, scline->tp[1]);
-                    if (creatvar == -1)
-                    {
-                        block = CrtConf_ANNOYANCE;
-                        creatvar = get_id(creatmodel_annoyance_commands, scline->tp[1]);
-                        if (creatvar == -1)
-                        {
-                            block = CrtConf_EXPERIENCE;
-                            creatvar = get_id(creatmodel_experience_commands, scline->tp[1]);
-                            if (creatvar == -1)
-                            {
-                                block = CrtConf_APPEARANCE;
-                                creatvar = get_id(creatmodel_appearance_commands, scline->tp[1]);
-                                if (creatvar == -1)
-                                {
-                                    block = CrtConf_SENSES;
-                                    creatvar = get_id(creatmodel_senses_commands, scline->tp[1]);
-                                    if (creatvar == -1)
-                                    {
-                                        SCRPTERRLOG("Unknown creature configuration variable");
-                                        DEALLOCATE_SCRIPT_VALUE
-                                        return;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        SCRPTERRLOG("Unknown creature configuration variable");
+        DEALLOCATE_SCRIPT_VALUE
+        return;
     }
 
     long config_value_primary = 0, config_value_secondary = 0, config_value_tertiary = 0, config_value_quaternary = 0, config_value_quinary = 0, config_value_senary = 0;
     if (block == CrtConf_ATTRIBUTES)
     {
+        //  HEROVSKEEPERCOST || CREATURELOYALTY  || LOYALTYLEVEL
+        if ((creatvar == 22) || (creatvar == 24) || (creatvar == 25))
+        {
+            SCRPTERRLOG("Attribute %s(%d) not supported.", creatmodel_attributes_commands[creatvar - 1].name, creatvar);
+            DEALLOCATE_SCRIPT_VALUE
+            return;
+        }
         if (creatvar == 20) // ATTACKPREFERENCE
         {
             config_value_primary = get_id(attackpref_desc, scline->tp[2]);
+        }
+        else if (creatvar == 28) // PROPERTIES
+        {
+            config_value_primary = get_rid(creatmodel_properties_commands, scline->tp[2]);
+            if (scline->tp[3][0] != '\0')
+            {
+                config_value_secondary = get_rid(script_boolean_desc, scline->tp[3]);
+            }
+            else
+            {
+                config_value_secondary = 1;
+            }
         }
         else if (creatvar == 34) // LAIROBJECT
         {
@@ -2515,7 +2493,7 @@ static void set_creature_configuration_check(const struct ScriptLine* scline)
             // value 2: 'empty' is 'set', '1' is 'add', '0' is 'clear'.
             if (scline->tp[3][0] != '\0')
             {
-                config_value_secondary = atoi(scline->tp[3]);
+                config_value_secondary = get_rid(script_boolean_desc, scline->tp[3]);
             }
             else
             {
@@ -2585,7 +2563,7 @@ static void set_creature_configuration_check(const struct ScriptLine* scline)
             // value 2: 'empty' is 'set', '1' is 'add', '0' is 'clear'.
             if (scline->tp[3][0] != '\0')
             {
-                config_value_secondary = atoi(scline->tp[3]);
+                config_value_secondary = get_rid(script_boolean_desc, scline->tp[3]);
             }
             else
             {
@@ -2727,7 +2705,7 @@ static void set_creature_configuration_check(const struct ScriptLine* scline)
             // value 2: 'empty' is 'set', '1' is 'add', '0' is 'clear'.
             if (scline->tp[3][0] != '\0')
             {
-                config_value_secondary = atoi(scline->tp[3]);
+                config_value_secondary = get_rid(script_boolean_desc, scline->tp[3]);
             }
             else
             {
@@ -3073,15 +3051,8 @@ static void set_creature_configuration_process(struct ScriptContext* context)
         case 21: // PAY
             crconf->pay = value;
             break;
-        case 22: // HEROVSKEEPERCOST
-            break;
         case 23: // SLAPSTOKILL
             crconf->slaps_to_kill = value;
-            break;
-        case 24: // CREATURELOYALTY
-        case 25: // LOYALTYLEVEL
-        case 28: // PROPERTIES
-            CONFWRNLOG("Attribute (%d) not supported", creature_variable);
             break;
         case 26: // DAMAGETOBOULDER
             crconf->damage_to_boulder = value;
@@ -3089,6 +3060,9 @@ static void set_creature_configuration_process(struct ScriptContext* context)
         case 27: // THINGSIZE
             crconf->thing_size_xy = value;
             crconf->thing_size_z = config_value_secondary;
+            break;
+        case 28: // PROPERTIES
+            set_creature_property(creatid, value, (config_value_secondary != 0));
             break;
         case 29: // NAMETEXTID
             crconf->namestr_idx = value;
@@ -3624,7 +3598,7 @@ static void set_creature_configuration_process(struct ScriptContext* context)
             {
                 struct Thing* thing = thing_get(get_user_state(user)->controlled_thing_idx);
                 if (thing_is_creature(thing) && (thing->model == creatid) && flag_is_set(thing->alloc_flags, TAlF_IsControlled))
-                    set_player_lens(get_net_user_player_number(user), value);
+                    set_user_lens(user, value);
             }
             break;
         }
@@ -3643,6 +3617,31 @@ static void set_creature_configuration_process(struct ScriptContext* context)
         ERRORLOG("Trying to configure unsupported creature block (%d)",block);
     }
     check_and_auto_fix_stats();
+}
+
+static void set_creature_property_check(const struct ScriptLine* scline)
+{
+    ALLOCATE_SCRIPT_VALUE(scline->command, 0);
+
+    int32_t prop_id = get_rid(creatmodel_properties_commands, scline->tp[1]);
+    if (prop_id == -1)
+    {
+        SCRPTERRLOG("Unknown creature property kind, \"%s\"", scline->tp[1]);
+        DEALLOCATE_SCRIPT_VALUE
+        return;
+    }
+    value->shorts[1] = scline->np[0];
+    value->longs[1] = prop_id;
+    value->chars[1] = scline->np[2];
+    PROCESS_SCRIPT_VALUE(scline->command);
+}
+static void set_creature_property_process(struct ScriptContext* context)
+{
+    ThingModel creature = context->value->shorts[1];
+    int32_t property = context->value->longs[1];
+    TbBool enable = context->value->chars[1];
+
+    set_creature_property(creature, property, enable);
 }
 
 static void set_object_configuration_process(struct ScriptContext *context)
@@ -4430,6 +4429,7 @@ static void use_power_on_players_creatures_check(const struct ScriptLine* scline
     PlayerNumber caster_player = scline->np[2];
     const char* pwr_name = scline->tp[3];
     short pwr_id = get_rid(power_desc, pwr_name);
+    struct PowerConfigStats* powerst = get_power_model_stats(pwr_id);
     KeepPwrLevel power_level = scline->np[4];
     short free = scline->np[5];
     if (free == -1)
@@ -4453,38 +4453,21 @@ static void use_power_on_players_creatures_check(const struct ScriptLine* scline
         SCRPTERRLOG("Invalid power: %s", pwr_name);
         DEALLOCATE_SCRIPT_VALUE
     }
-    switch (pwr_id)
+    if ((powerst->can_cast_flags & PwCast_AllCrtrs) == 0)
     {
-    case PwrK_HEALCRTR:
-    case PwrK_SPEEDCRTR:
-    case PwrK_PROTECT:
-    case PwrK_REBOUND:
-    case PwrK_CONCEAL:
-    case PwrK_DISEASE:
-    case PwrK_CHICKEN:
-    case PwrK_FREEZE:
-    case PwrK_SLOW:
-    case PwrK_FLIGHT:
-    case PwrK_VISION:
-    case PwrK_CALL2ARMS:
-    case PwrK_LIGHTNING:
-    case PwrK_CAVEIN:
-    case PwrK_SIGHT:
-    case PwrK_TIMEBOMB:
+        SCRPTERRLOG("Power %s cannot be cast on a Creature", power_code_name(pwr_id));
+        DEALLOCATE_SCRIPT_VALUE
+    }
+    if (powerst->overcharge_check_idx != OcC_do_not_expand)
+    {
         if ((power_level < 1) || (power_level > MAGIC_OVERCHARGE_LEVELS))
         {
             SCRPTERRLOG("Power %s level %d out of range. Acceptible values are %d~%d", pwr_name, power_level, 1, MAGIC_OVERCHARGE_LEVELS);
             DEALLOCATE_SCRIPT_VALUE
         }
         power_level--; // transform human 1~9 range into computer 0~8 range
-        break;
-    case PwrK_SLAP:
-    case PwrK_MKDIGGER:
-        break;
-    default:
-        SCRPTERRLOG("Power not supported for this command: %s", power_code_name(pwr_id));
-        DEALLOCATE_SCRIPT_VALUE
     }
+
     value->shorts[1] = crtr_id;
     value->shorts[2] = pwr_id;
     value->shorts[3] = power_level;
@@ -6189,8 +6172,7 @@ static void change_slab_texture_process(struct ScriptContext* context)
     else
     {
         SlabCodedCoords slb_num = get_slab_number(context->value->shorts[0], context->value->shorts[1]);
-        game.slab_ext_data[slb_num] = context->value->bytes[4];
-        game.slab_ext_data_initial[slb_num] = context->value->bytes[4];
+        set_slab_texture_set(slb_num, context->value->bytes[4], true);
     }
 }
 
@@ -7079,7 +7061,7 @@ const struct CommandDesc command_desc[] = {
   {"SET_CREATURE_FEAR_WOUNDED",         "CN      ", Cmd_SET_CREATURE_FEAR_WOUNDED, NULL, NULL},
   {"SET_CREATURE_FEAR_STRONGER",        "CN      ", Cmd_SET_CREATURE_FEAR_STRONGER, NULL, NULL},
   {"SET_CREATURE_FEARSOME_FACTOR",      "CN      ", Cmd_SET_CREATURE_FEARSOME_FACTOR, NULL, NULL},
-  {"SET_CREATURE_PROPERTY",             "CAB     ", Cmd_SET_CREATURE_PROPERTY, NULL, NULL},
+  {"SET_CREATURE_PROPERTY",             "CAB     ", Cmd_SET_CREATURE_PROPERTY, &set_creature_property_check, &set_creature_property_process},
   {"IF_AVAILABLE",                      "PAOAa   ", Cmd_IF_AVAILABLE, &if_available_check, NULL},
   {"IF_CONTROLS",                       "PAOAa   ", Cmd_IF_CONTROLS,  &if_controls_check, NULL},
   {"SET_COMPUTER_GLOBALS",              "PNNNNNNn", Cmd_SET_COMPUTER_GLOBALS, &set_computer_globals_check, &set_computer_globals_process},

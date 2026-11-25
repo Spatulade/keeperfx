@@ -229,7 +229,6 @@ void set_player_as_lost_level(struct PlayerInfo *player)
     }
     if ((game.conf.rules[player->id_number].gameplay.classic_bugs_flags & ClscBug_NoHandPurgeOnDefeat) == 0) {
         clear_things_in_hand(player);
-        dungeon->num_things_in_hand = 0;
     }
     if (player_uses_power_call_to_arms(player->id_number))
         turn_off_power_call_to_arms(player->id_number);
@@ -244,12 +243,7 @@ void set_player_as_lost_level(struct PlayerInfo *player)
     for (NetUserId user = 0; user < MAX_NET_USERS; user++) {
         if (get_net_user_player_number(user) != player->id_number)
             continue;
-        struct Thing *thing = thing_get(get_user_state(user)->controlled_thing_idx);
-        if (get_user_view_type(user) == PVT_CreatureContrl)
-            leave_creature_as_controller(user, thing);
-        else if (get_user_view_type(user) == PVT_CreaturePasngr)
-            leave_creature_as_passenger(user, thing);
-        else if (!flag_is_set(player->allocflags, PlaF_CompCtrl))
+        if (!leave_user_controlled_creature(user) && !flag_is_set(player->allocflags, PlaF_CompCtrl))
             set_user_view_type(user, PVT_DungeonTop);
     }
     for (NetUserId user = 0; user < MAX_NET_USERS; user++) {
@@ -822,7 +816,7 @@ void turn_user_cursor_light(NetUserId user, TbBool turn_on)
         light_turn_light_off(idx);
 }
 
-void init_user_state(NetUserId user, PlayerNumber player_id)
+void init_user_state(NetUserId user, PlayerNumber player_id, const char *name)
 {
     struct UserState* ustate = get_user_state(user);
     if (user_state_invalid(ustate))
@@ -832,6 +826,7 @@ void init_user_state(NetUserId user, PlayerNumber player_id)
     }
     memset(ustate, 0, sizeof(*ustate));
     ustate->player_id = player_id;
+    snprintf(ustate->name, sizeof(ustate->name), "%s", name);
     ustate->teleport_destination = 19;
     ustate->battleid = 1;
     struct InitLight ilght;
@@ -1002,6 +997,9 @@ void init_players(void)
             else
                 player->allocflags &= ~PlaF_CompCtrl;
             set_flag_value(player->allocflags, PlaF_Seat, flag_is_set(replay.head.players_seat, to_flag(i)));
+            if (player_is_seat(player) && player_is_roaming(i)) {
+                player->player_type = PT_Keeper;
+            }
             if ((player->allocflags & PlaF_CompCtrl) == 0)
             {
               game.human_players_count++;
@@ -1239,7 +1237,7 @@ void init_players_local_game(void)
     struct PlayerInfo* player = get_my_player();
     player->id_number = my_player_number;
     player->allocflags |= PlaF_Allocated | PlaF_Seat;
-    init_user_state(SOLO_HUMAN_ID, player->id_number);
+    init_user_state(SOLO_HUMAN_ID, player->id_number, "");
 
     if( player->id_number == PLAYER_GOOD)
     {
@@ -1308,7 +1306,7 @@ void process_players(void)
     SYNCDBG(17,"Finished");
 }
 
-TbBool player_sell_trap_at_subtile(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSubtlCoord stl_y, TbBool whole_slab)
+TbBool player_sell_trap_at_subtile(PlayerNumber plyr_idx, NetUserId user, MapSubtlCoord stl_x, MapSubtlCoord stl_y, TbBool whole_slab)
 {
     struct Thing *thing;
     struct Coord3d pos;
@@ -1341,7 +1339,7 @@ TbBool player_sell_trap_at_subtile(PlayerNumber plyr_idx, MapSubtlCoord stl_x, M
     dungeon->traps_sold += traps_sold;
     dungeon->manufacture_gold += sell_value;
 
-    play_player_sample(plyr_idx, snd_tile_sell);
+    play_action_sample(plyr_idx, user, snd_tile_sell);
     dungeon->camera_deviate_jump = 192;
     if (sell_value != 0)
     {
@@ -1360,7 +1358,7 @@ TbBool player_sell_trap_at_subtile(PlayerNumber plyr_idx, MapSubtlCoord stl_x, M
     return true;
 }
 
-TbBool player_sell_door_at_subtile(PlayerNumber plyr_idx, MapSubtlCoord stl_x, MapSubtlCoord stl_y)
+TbBool player_sell_door_at_subtile(PlayerNumber plyr_idx, NetUserId user, MapSubtlCoord stl_x, MapSubtlCoord stl_y)
 {
     MapSubtlCoord cstl_x = stl_slab_center_subtile(stl_x);
     MapSubtlCoord cstl_y = stl_slab_center_subtile(stl_y);
@@ -1376,7 +1374,7 @@ TbBool player_sell_door_at_subtile(PlayerNumber plyr_idx, MapSubtlCoord stl_x, M
     dungeon->doors_sold++;
     dungeon->manufacture_gold += sell_value;
     destroy_door(thing);
-    play_player_sample(plyr_idx, snd_tile_sell);
+    play_action_sample(plyr_idx, user, snd_tile_sell);
     struct Coord3d pos;
     set_coords_to_slab_center(&pos,subtile_slab(stl_x),subtile_slab(stl_y));
     if (sell_value != 0)

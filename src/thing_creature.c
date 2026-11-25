@@ -36,6 +36,7 @@
 #include "config_creature.h"
 #include "config_crtrstates.h"
 #include "config_effects.h"
+#include "config_textures.h"
 #include "config_lenses.h"
 #include "config_magic.h"
 #include "config_terrain.h"
@@ -80,6 +81,7 @@
 #include "player_utils.h"
 #include "config_players.h"
 #include "power_hand.h"
+#include "power_hand_fp.h"
 #include "power_process.h"
 #include "room_data.h"
 #include "room_graveyard.h"
@@ -247,6 +249,10 @@ TbBool control_creature_as_controller(NetUserId user, struct Thing *thing)
     struct UserState* ustate = get_user_state(user);
     struct CreatureModelConfig *crconf;
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
+    // another user may have finished possessing it first
+    if (thing_controlled_by_other_user(user, thing, UCT_Direct | UCT_Passenger | UCT_Other)) {
+        return false;
+    }
     if (((thing->owner != player->id_number) && (ustate->work_state != PSt_FreeCtrlDirect))
       || !thing_can_be_controlled_as_controller(thing))
     {
@@ -270,13 +276,19 @@ TbBool control_creature_as_controller(NetUserId user, struct Thing *thing)
     thing->alloc_flags |= TAlF_IsControlled;
     thing->rendering_flags |= TRF_Invisible;
     thing->move_angle_z = 0;
-    if (!chicken)
+    if (chicken)
     {
-        set_start_state(thing);
+        internal_set_thing_state(thing, CrSt_CreaturePretendChickenSetupMove);
+    }
+    else if (thing->active_state == CrSt_CreatureSlapCowers)
+    {
+        // slapped during the zoom-in
+        cctrl->active_state_bkp = CrSt_ManualControl;
+        cctrl->continue_state_bkp = CrSt_Unused;
     }
     else
     {
-        internal_set_thing_state(thing, CrSt_CreaturePretendChickenSetupMove);
+        set_start_state(thing);
     }
     set_user_view_type(user, PVT_CreatureContrl);
     if (thing_is_creature(thing))
@@ -295,7 +307,7 @@ TbBool control_creature_as_controller(NetUserId user, struct Thing *thing)
     if (thing->class_id == TCls_Creature) {
         crconf = creature_stats_get_from_thing(thing);
         SYNCDBG(7,"Controlling creature '%s', eye_effect=%d", crconf->name, crconf->eye_effect);
-        set_player_lens(player->id_number, crconf->eye_effect);
+        set_user_lens(user, crconf->eye_effect);
     }
     return true;
 }
@@ -1306,7 +1318,7 @@ TbBool clear_thing_spell_flags_f(struct Thing *thing, unsigned long spell_flags,
             clear_flag(cctrl->spell_flags, CSAfF_Light);
             if (thing->light_id != 0)
             {
-                if (flag_is_set(thing->rendering_flags, TRF_Invisible))
+                if (flag_is_set(thing->alloc_flags, TAlF_IsControlled))
                 {
                     light_set_light_intensity(thing->light_id, (light_get_light_intensity(thing->light_id) - 20));
                     struct Light *lgt = &game.lish.lights[thing->light_id];
@@ -1670,7 +1682,8 @@ void process_thing_spell_teleport_effects(struct Thing *thing, struct CastedSpel
     if (cspell->duration == spconf->duration / 2)
     {
         PlayerNumber plyr_idx = get_appropriate_player_for_creature(thing);
-        struct UserState* ustate = get_player_primary_user_state(get_player(plyr_idx));
+        const NetUserId possessor = get_user_controlling_thing(thing, UCT_Direct | UCT_Passenger);
+        struct UserState* ustate = (possessor >= 0) ? get_user_state(possessor) : get_player_primary_user_state(get_player(plyr_idx));
         TbBool has_user = !user_state_invalid(ustate);
         unsigned char destination = has_user ? ustate->teleport_destination : 19;
         struct Coord3d pos;
@@ -1818,6 +1831,7 @@ void process_thing_spell_teleport_effects(struct Thing *thing, struct CastedSpel
             {
                 room_pos.x.val = subtile_coord_center(room->central_stl_x);
                 room_pos.y.val = subtile_coord_center(room->central_stl_y);
+                room_pos.z.val = get_floor_height_at(&room_pos);
                 allowed = creature_can_navigate_to(thing, &room_pos, NavRtF_NoOwner);
                 if (!allowed)
                 {
@@ -2067,6 +2081,10 @@ void creature_cast_spell_at_thing(struct Thing *castng, struct Thing *targetng, 
 
 void teleport_familiar_to_summoner(struct Thing *famlrtng, struct Thing* creatng)
 {
+    // A familiar held in a hand is off the map; moving it would put it back on the
+    // map while still held, and dropping it later would break the map's thing lists
+    if (thing_is_picked_up(famlrtng))
+        return;
     create_effect(&famlrtng->mappos, imp_spangle_effects[get_player_color_idx(famlrtng->owner)], famlrtng->owner);
     move_thing_in_map(famlrtng, &creatng->mappos);
     cleanup_current_thing_state(famlrtng);
@@ -2366,21 +2384,22 @@ void creature_cast_spell(struct Thing *castng, SpellKind spl_idx, CrtrExpLevel s
     }
 }
 
+TbBool creature_counts_in_dungeon_stats(const struct Thing *creatng)
+{
+    if (is_hero_thing(creatng) || is_neutral_thing(creatng)) {
+        return false;
+    }
+    if (thing_is_picked_up(creatng) || creature_is_being_unconscious(creatng)) {
+        return false;
+    }
+    const struct CreatureControl *cctrl = creature_control_get_from_thing(creatng);
+    return !flag_is_set(cctrl->creature_state_flags, TF2_SummonedCreature);
+}
+
 void update_creature_count(struct Thing *creatng)
 {
     TRACE_THING(creatng);
-    struct CreatureControl* cctrl;
-    if (!thing_exists(creatng)) {
-        return;
-    }
-    if (is_hero_thing(creatng) || is_neutral_thing(creatng)) {
-        return;
-    }
-    if (thing_is_picked_up(creatng) || creature_is_being_unconscious(creatng)) {
-        return;
-    }
-    cctrl = creature_control_get_from_thing(creatng);
-    if (flag_is_set(cctrl->creature_state_flags, TF2_SummonedCreature)){
+    if (!thing_exists(creatng) || !creature_counts_in_dungeon_stats(creatng)) {
         return;
     }
     struct Dungeon* dungeon = get_players_num_dungeon(creatng->owner);
@@ -2390,7 +2409,7 @@ void update_creature_count(struct Thing *creatng)
     int statyp = get_creature_state_type(creatng);
     dungeon->crmodel_state_type_count[creatng->model][statyp]++;
     int job_idx = get_creature_gui_job(creatng);
-    if (can_thing_be_picked_up_by_player(creatng, creatng->owner))
+    if (can_thing_be_picked_up_by_player(creatng, creatng->owner) && !thing_is_possessed(creatng))
     {
         if (!creature_is_dragging_or_being_dragged(creatng)) {
             dungeon->guijob_all_creatrs_count[creatng->model][job_idx]++;
@@ -3331,10 +3350,11 @@ struct Thing* cause_creature_death(struct Thing *thing, CrDeathFlags flags)
 
 void prepare_to_controlled_creature_death(struct Thing *thing)
 {
-    const NetUserId user = get_user_controlling_thing(thing, UCT_Selected | UCT_Direct | UCT_Passenger | UCT_Other);
+    NetUserId user = get_user_controlling_thing(thing, UCT_Direct | UCT_Passenger | UCT_Other);
+    if (user < 0)
+        user = get_user_controlling_thing(thing, UCT_Selected);
     if (user < 0)
         return;
-    struct PlayerInfo* player = get_player(thing->owner);
     leave_creature_as_controller(user, thing);
     struct UserState *ustate = get_user_state(user);
     if (!user_state_invalid(ustate)) {
@@ -3348,8 +3368,8 @@ void prepare_to_controlled_creature_death(struct Thing *thing)
         turn_on_main_panel_menu();
         local_state.show_panel = local_state.show_gui;
     }
-    if (player == get_displayed_player()) {
-        PaletteSetPlayerPalette(player, engine_palette);
+    if (user == get_displayed_user()) {
+        PaletteSetPlayerPalette(get_player(thing->owner), engine_palette);
         local_state.palette_fade_step_possession = 11;
     }
 }
@@ -4118,8 +4138,9 @@ ThingIndex process_player_use_instance(struct Thing *thing, CrInstance inst_id, 
         {
             // If cannot find a valid target, do not use it and don't consider it used.
 
-            // Make a rejection sound
-            play_non_3d_sample(snd_refusal);
+            if (user_controls_thing(get_local_user(), thing, UCT_Direct | UCT_Other)) {
+                play_non_3d_sample(snd_refusal);
+            }
             return 0;
         }
     }
@@ -4146,7 +4167,11 @@ TbBool creature_instance_has_reset_at(const struct Thing *thing, const struct Cr
 
 TbBool possession_instance_can_start(struct Thing *thing, const struct CreatureControl *cctrl, CrInstance inst_id, GameTurn turn, const struct Packet *pckt, TbBool allow_unavailable)
 {
-    if ((inst_id == CrInst_NULL) || (cctrl->instance_id != CrInst_NULL)) {
+    if ((inst_id == CrInst_NULL) || (cctrl->instance_id != CrInst_NULL) || (thing->active_state == CrSt_CreatureSlapCowers)) {
+        return false;
+    }
+    // Carried in a hand, or just dropped from one
+    if (fp_hand_blocks_creature_commands(thing)) {
         return false;
     }
     if (!cctrl->instance_available[inst_id]) {
@@ -4430,7 +4455,7 @@ void draw_creature_view(struct Thing *thing)
   }
 }
 
-struct Thing *get_creature_near_for_controlling(PlayerNumber plyr_idx, MapCoord x, MapCoord y)
+struct Thing *get_creature_near_for_controlling(PlayerNumber plyr_idx, NetUserId user, MapCoord x, MapCoord y)
 {
     MapCoordDelta nearest_distance = INT32_MAX;
     struct Thing *nearest_thing = INVALID_THING;
@@ -4448,7 +4473,7 @@ struct Thing *get_creature_near_for_controlling(PlayerNumber plyr_idx, MapCoord 
             i = thing->next_on_mapblk;
 
 
-            if (can_cast_spell(plyr_idx,PwrK_POSSESS,stl_x,stl_y,thing,CastChk_Default ))
+            if (can_cast_spell(plyr_idx,user,PwrK_POSSESS,stl_x,stl_y,thing,CastChk_Default ))
             {
                 MapCoordDelta distance = chessboard_distance(thing->mappos.x.val, thing->mappos.y.val, x, y);
                 if (distance < nearest_distance)
@@ -5202,7 +5227,7 @@ long player_list_creature_filter_most_experienced_and_pickable1(const struct Thi
         && (thing->class_id == param->class_id)
         && ((thing_matches_model(thing,param->model_id)))
         && ((param->primary_number == -1) || (get_creature_gui_job(thing) == param->primary_number))
-        && !thing_is_picked_up(thing)
+        && !thing_is_picked_up(thing) && !thing_is_possessed(thing)
         && (thing->active_state != CrSt_CreatureUnconscious) && (nmaxim > maximizer) )
     {
         if (can_thing_be_picked_up_by_player(thing, param->plyr_idx))
@@ -5285,7 +5310,7 @@ long player_list_creature_filter_least_experienced_and_pickable1(const struct Th
       && (thing->class_id == param->class_id)
       && ((thing_matches_model(thing,param->model_id)))
       && ((param->primary_number == -1) || (get_creature_gui_job(thing) == param->primary_number))
-      && !thing_is_picked_up(thing)
+      && !thing_is_picked_up(thing) && !thing_is_possessed(thing)
       && (thing->active_state != CrSt_CreatureUnconscious) && (nmaxim > maximizer) )
     {
       if (can_thing_be_picked_up_by_player(thing, param->plyr_idx))
@@ -5362,7 +5387,7 @@ long player_list_creature_filter_of_gui_job_and_pickable1(const struct Thing *th
     if ( ((param->plyr_idx == -1) || (thing->owner == param->plyr_idx))
       && (thing->class_id == param->class_id)
       && ((thing_matches_model(thing,param->model_id)))
-      && !thing_is_picked_up(thing)
+      && !thing_is_picked_up(thing) && !thing_is_possessed(thing)
       && ((param->primary_number == -1) || (get_creature_gui_job(thing) == param->primary_number)) // job_idx
       && (thing->active_state != CrSt_CreatureUnconscious) )
     {
@@ -6092,6 +6117,12 @@ short update_creature_movements(struct Thing *thing)
     {
       if ((thing->alloc_flags & TAlF_IsControlled) != 0)
       {
+          if (thing->active_state == CrSt_CreatureSlapCowers) {
+              upd_done = 1;
+              memset(&cctrl->moveaccel, 0, sizeof(cctrl->moveaccel));
+              cctrl->move_speed = 0;
+              cctrl->creature_state_flags &= ~TF2_CreatureIsMoving;
+          } else
           if (update_controlled_creature_movement(thing, cctrl)) {
               upd_done = 1;
           }
@@ -6151,32 +6182,16 @@ void check_for_creature_escape_from_lava(struct Thing *thing)
     }
 }
 
-/**
- * Get's an effect element for a footstep.
- */
-ThingModel get_footstep_effect_element(struct Thing* thing)
+unsigned char path_tileset_id(struct Thing *thing)
 {
-    static const unsigned char tileset_footstep_textures[TEXTURE_VARIATIONS_COUNT] =
-    { TngEffElm_None,       TngEffElm_None,         TngEffElm_IceMelt3,     TngEffElm_None,
-      TngEffElm_None,       TngEffElm_None,         TngEffElm_None,         TngEffElm_None,
-      TngEffElm_StepSand,   TngEffElm_StepGypsum,   TngEffElm_None,         TngEffElm_None,
-      TngEffElm_None,       TngEffElm_None,         TngEffElm_None,         TngEffElm_None
-    };
-
-    short texture;
-        unsigned char ext_txtr = game.slab_ext_data[get_slab_number(subtile_slab(thing->mappos.x.stl.num), subtile_slab(thing->mappos.y.stl.num))];
-    if (ext_txtr == 0)
-    {
-        // Default map texture
-        texture = game.texture_id;
-    }
-    else
-    {
-        // Slab specific texture
-        texture = ext_txtr - 1;
-    }
-
-    return tileset_footstep_textures[texture];
+    struct SlabMap *slb = get_slabmap_thing_is_on(thing);
+    if (slb->kind != SlbT_PATH)
+        return 0;
+    unsigned char ext_txtr = game.slab_ext_data[get_slab_number(subtile_slab(thing->mappos.x.stl.num), subtile_slab(thing->mappos.y.stl.num))];
+    int texture = ext_txtr ? ext_txtr : game.texture_id + 1;
+    if ((texture <= 0) || (texture >= TEXTURE_VARIATIONS_COUNT))
+        return 0;
+    return (unsigned char)texture;
 }
 
 void process_creature_leave_footsteps(struct Thing *thing)
@@ -6204,17 +6219,11 @@ void process_creature_leave_footsteps(struct Thing *thing)
         }
     } else
     {
-        // Tileset footprints, formerly Snow footprints.
-        ThingModel footprint = get_footstep_effect_element(thing);
+        ThingModel footprint = tileset_footprint[path_tileset_id(thing)];
         if (footprint != TngEffElm_None)
         {
-            struct SlabMap* slb = get_slabmap_for_subtile(thing->mappos.x.stl.num, thing->mappos.y.stl.num);
-            if (slb->kind == SlbT_PATH)
-            {
-                set_flag(thing->movement_flags,TMvF_IsOnSnow);
-                nfoot = get_foot_creature_has_down(thing, cctrl);
-                footng = create_footprint_sine(&thing->mappos, thing->move_angle_xy, nfoot, footprint, thing->owner);
-            }
+            nfoot = get_foot_creature_has_down(thing, cctrl);
+            footng = create_footprint_sine(&thing->mappos, thing->move_angle_xy, nfoot, footprint, thing->owner);
         }
     }
 }
@@ -6238,7 +6247,7 @@ HitPoints apply_damage_to_thing_and_display_health(struct Thing *thing, HitPoint
         cdamage = 0;
     }
     if (cdamage > 0) {
-        thing->creature.health_bar_turns = 8;
+        thing->creature.health_bar_turns = HEALTH_BAR_FLASH_TURNS;
     }
     return cdamage;
 }
@@ -6266,7 +6275,6 @@ void process_landscape_affecting_creature(struct Thing *thing)
     SYNCDBG(18,"Starting");
     thing->movement_flags &= ~TMvF_IsOnWater;
     thing->movement_flags &= ~TMvF_IsOnLava;
-    thing->movement_flags &= ~TMvF_IsOnSnow;
     struct CreatureControl* cctrl = creature_control_get_from_thing(thing);
     if (creature_control_invalid(cctrl))
     {
@@ -6680,6 +6688,9 @@ TngUpdateRet update_creature(struct Thing *thing)
 
 TbBool creature_is_slappable(const struct Thing *thing, PlayerNumber plyr_idx)
 {
+    if (flag_is_set(creature_control_get_from_thing(thing)->creature_state_flags, TF2_Spectator)) {
+        return false;
+    }
     if (creature_is_being_unconscious(thing)) {
         return false;
     }
@@ -7241,7 +7252,7 @@ void direct_control_pick_up_or_drop(NetUserId user, struct Thing *creatng)
                 {
                     if (user_controls_thing(user, creatng, UCT_Direct | UCT_Other))
                     {
-                        play_player_sample(plyr_idx, snd_refusal);
+                        play_user_sample(user, snd_refusal);
                         return;
                     }
                 }
@@ -7269,7 +7280,7 @@ void direct_control_pick_up_or_drop(NetUserId user, struct Thing *creatng)
                     {
                         if (user_controls_thing(user, creatng, UCT_Direct | UCT_Other))
                         {
-                            play_player_sample(plyr_idx, snd_refusal);
+                            play_user_sample(user, snd_refusal);
                             return;
                         }
                     }
@@ -7644,6 +7655,18 @@ struct Thing* script_get_creature_by_criteria(PlayerNumber plyr_idx, ThingModel 
             dist,
             filter, &param);
     }
+    case CSelCrit_Possessed:
+        for (NetUserId user = 0; user < MAX_NET_USERS; user++)
+        {
+            if (get_net_user_player_number(user) != plyr_idx)
+                continue;
+            if (get_user_view_type(user) != PVT_CreatureContrl)
+                continue;
+            struct Thing *thing = thing_get(get_user_state(user)->controlled_thing_idx);
+            if (thing_is_creature(thing) && creature_matches_model(thing, crmodel))
+                return thing;
+        }
+        return INVALID_THING;
     default:
         ERRORLOG("Invalid level up criteria %d", (int)criteria);
         return INVALID_THING;
@@ -7881,10 +7904,8 @@ struct Thing *grow_up_creature(struct Thing *thing, ThingModel grow_up_model, Cr
     // Handles picked up by player case.
     if (thing_is_picked_up_by_player(thing, thing->owner))
     {
-        struct Dungeon *dungeon = get_dungeon(thing->owner);
-        if (get_thing_in_hand_id(thing, thing->owner) >= 0)
+        if (replace_thing_in_power_hand_list(thing, newtng, thing->owner))
         {
-            dungeon->things_in_hand[get_thing_in_hand_id(thing, thing->owner)] = newtng->index;
             remove_thing_from_limbo(thing);
             place_thing_in_limbo(newtng);
         }
